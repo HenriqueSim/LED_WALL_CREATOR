@@ -1,8 +1,8 @@
 """FrameState -> BGR uint8 frame.
 
 Layers (back to front):
-  1. background design (Vertical Blocks / Light Shafts / Horizon / None), drawn crisp with
-     OpenCV + a soft layer, then a two-radius Gaussian bloom computed at 1/4 resolution
+  1. the song's elements (polygon / ring / vertical blocks / light shafts / horizon / beam), each
+     drawn crisp on its own layer with its own glow amount, then a two-radius Gaussian bloom at 1/4 res
   2. band name layer with its own envelope, peak and glow radius (composited after the bloom)
   3. lyrics in the reserved headroom band at the top
 """
@@ -67,207 +67,349 @@ class FrameRenderer:
         self.s = self.h / 1080.0
         self.sw, self.sh = max(2, self.w // self.DS), max(2, self.h // self.DS)
         self.core = np.zeros((self.h, self.w, 3), np.uint8)
+        self.layer = np.zeros((self.h, self.w, 3), np.uint8)
         self.mask = np.zeros((self.h, self.w), np.uint8)
-        self.fmask = np.zeros((self.h, self.w), np.uint8)
         ys, xs = np.mgrid[0:self.sh, 0:self.sw].astype(np.float32)
         self.ambient = np.exp(-(((xs - self.sw / 2) / (self.sw * 0.55)) ** 2 + ((self.sh - ys) / (self.sh * 0.38)) ** 2))[..., None]
-        self.vfade = (np.clip(1.0 - ys[:, :1] / self.sh, 0, 1) ** 0)[..., None]  # replaced in _gradient
-        self._grad_key = self._layout_key = self._logo_key = None
+        self._grad_cache: dict = {}
+        self._layout_cache: dict = {}
+        self._logo_key = None
         self._lyric_cache: dict = {}
+        self.bboxes: dict = {}          # element id -> (x0, y0, x1, y1) in pixels, for hit-testing in the GUI
 
     def th(self, px: float) -> int:
         return max(1, int(round(px * self.s)))
 
-    # ---- caches --------------------------------------------------------------------
-    def _gradient(self, main_rgb, headroom: float):
-        key = (tuple(main_rgb), round(headroom, 3))
-        if key != self._grad_key:
-            top, bottom = gradient_colors(main_rgb)
-            for size, attr in (((self.h, self.w), "grad"), ((self.sh, self.sw), "grad_small")):
-                hh, ww = size
-                t = np.clip((np.arange(hh, dtype=np.float32) / hh - headroom) / (1.0 - headroom), 0, 1)[:, None]
-                col = np.array(top[::-1], np.float32) * (1 - t) + np.array(bottom[::-1], np.float32) * t
-                setattr(self, attr, np.ascontiguousarray(np.repeat(col[:, None, :], ww, axis=1)).astype(np.uint8))
-            self.outline_rgb = tuple(min(255.0, c * 0.55 + 255 * 0.45) for c in top)
-            yy = np.arange(self.sh, dtype=np.float32)[:, None, None] / self.sh
-            self.vfade = np.clip((yy - headroom) / (1.0 - headroom), 0, 1) ** 1.3  # light rises from the floor
-            self._grad_key = key
-        return self.grad
+    # ---- helpers ----------------------------------------------------------------------
+    @staticmethod
+    def element_rgb(el, lk) -> tuple:
+        return {"accent": lk.accent_rgb, "custom": el.custom_rgb}.get(el.color, lk.main_rgb)
 
-    def _layout(self, n: int, slats: int, seed: int = 7):
-        """Slat geometry: members are clusters of thin slats so the 6 read as one skyline."""
-        key = (n, slats, self.w, self.h)
-        if key != self._layout_key:
-            rng = np.random.default_rng(seed)
-            margin = 0.03 * self.w
-            slot = (self.w - 2 * margin) / max(n, 1)
-            member_gap = slot * 0.09
-            area = slot - member_gap
-            sw_ = area / (slats + (slats - 1) * 0.28)
-            out = []
-            for i in range(n):
-                x0 = margin + i * slot + member_gap / 2
-                for j in range(slats):
-                    xl = x0 + j * sw_ * 1.28
-                    ang = 0.0 if rng.random() < 0.3 else rng.uniform(-13, 13)
-                    out.append(dict(member=i, x0=xl, x1=xl + sw_, slope=math.tan(math.radians(ang)) * sw_,
-                                    rest=rng.uniform(0.64, 0.76), hv=rng.uniform(0.8, 1.0), ph=rng.uniform(0, 6.28)))
-            self.slats = out
-            self.slot = slot
-            self._layout_key = key
-        return self.slats
+    def _drive(self, el, st: FrameState, song: Song):
+        """Per-part (one per member) brightness and flash for an element."""
+        n = max(1, len(st.levels))
+        lv = st.levels if len(st.levels) else np.zeros(1, np.float32)
+        fl = st.flash if len(st.flash) else np.zeros(1, np.float32)
+        d = el.driver
+        if d == "members":
+            levels, flash = lv, fl
+        else:
+            if d.startswith("m:"):
+                idx = song.member_index().get(d[2:])
+                v, f = (float(lv[idx]), float(fl[idx])) if idx is not None and idx < len(lv) else (0.0, 0.0)
+            elif d.startswith("g:"):
+                g = next((g for g in song.groups if g.id == d[2:]), None)
+                mi = song.member_index()
+                idx = [mi[m] for m in (g.members if g else []) if m in mi and mi[m] < len(lv)]
+                v = float(max((lv[i] for i in idx), default=0.0))
+                f = float(max((fl[i] for i in idx), default=0.0))
+            elif d == "always":
+                v, f = 1.0, float(fl.max())
+            elif d == "audio":
+                v, f = st.env, float(fl.max())
+            else:
+                v, f = 0.0, 0.0
+            levels, flash = np.full(n, v, np.float32), np.full(n, f, np.float32)
+        b = el.idle + (1.0 - el.idle) * np.minimum(levels, 1.2)
+        return levels, b, flash
+
+    def _part_colors(self, el, lk, flash) -> list:
+        base = np.array(self.element_rgb(el, lk), np.float32)
+        acc = np.array(lk.accent_rgb, np.float32)
+        return [base * (1 - f) + acc * f for f in flash]
+
+    def _grad_rows(self, rgb, y0: float, y1: float, width: int, height: int):
+        """Cached vertical gradient image (rows y0..y1) derived from an element colour."""
+        y0 = max(0, int(y0) // 4 * 4)
+        y1 = min(height, int(math.ceil(y1 / 4.0)) * 4)
+        key = (tuple(int(c) for c in rgb), y0, y1, width)
+        img = self._grad_cache.get(key)
+        if img is None:
+            if len(self._grad_cache) > 32:
+                self._grad_cache.clear()
+            top, bottom = gradient_colors(rgb)
+            t = np.linspace(0.0, 1.0, max(1, y1 - y0), dtype=np.float32)[:, None]
+            col = np.array(top[::-1], np.float32) * (1 - t) + np.array(bottom[::-1], np.float32) * t
+            img = np.ascontiguousarray(np.repeat(col[:, None, :], width, axis=1)).astype(np.uint8)
+            self._grad_cache[key] = img
+        return y0, y1, img
+
+    def _apply_mask(self, layer, mask, rgb, y0, y1, gradient: bool):
+        y0, y1, img = self._grad_rows(rgb, y0, y1, self.w, self.h)
+        if y1 <= y0:
+            return
+        m = mask[y0:y1]
+        m3 = cv2.merge([m, m, m])
+        if gradient:
+            res = cv2.multiply(img, m3, scale=1.0 / 255.0)
+        else:
+            res = cv2.multiply(m3, _bgr(rgb) + (0.0,), scale=1.0 / 255.0)
+        layer[y0:y1] = cv2.max(layer[y0:y1], res)
+
+    @staticmethod
+    def _outline_rgb(rgb) -> tuple:
+        top, _ = gradient_colors(rgb)
+        return tuple(min(255.0, c * 0.55 + 255 * 0.45) for c in top)
 
     # ---- main entry ------------------------------------------------------------------
     def render(self, st: FrameState, song: Song) -> np.ndarray:
         lk = song.look
-        core = self.core
+        core, layer = self.core, self.layer
         core.fill(0)
-        self._gradient(lk.main_rgb, lk.headroom)
-        soft = None
-        design = lk.design
-        if len(st.levels) and design == "blocks":
-            self._draw_blocks(core, st, song)
-        elif len(st.levels) and design == "shafts":
-            soft = self._draw_shafts(core, st, song)
-        elif len(st.levels) and design == "horizon":
-            soft = self._draw_horizon(core, st, song)
+        glow_src = np.zeros((self.sh, self.sw, 3), np.float32)
+        self.bboxes = {}
+        drawers = {"polygon": self._draw_polygon, "ring": self._draw_ring, "bars": self._draw_bars,
+                   "shafts": self._draw_shafts, "horizon": self._draw_horizon, "beam": self._draw_beam}
+        any_visible = False
+        for el in reversed(song.elements):          # list top = front layer
+            fn = drawers.get(el.type)
+            if not el.visible or fn is None:
+                continue
+            any_visible = True
+            layer.fill(0)
+            soft = fn(layer, el, st, song)
+            cv2.max(core, layer, dst=core)
+            if el.glow > 0:
+                glow_src += cv2.resize(layer, (self.sw, self.sh), interpolation=cv2.INTER_AREA).astype(np.float32) * el.glow
+            if soft is not None:
+                glow_src += soft
 
-        small = cv2.resize(core, (self.sw, self.sh), interpolation=cv2.INTER_AREA).astype(np.float32)
-        if soft is not None:
-            small += soft
         sigma = max(0.6, lk.glow_radius * self.s / self.DS * (1.0 + 0.6 * st.bloom))
-        tight = cv2.GaussianBlur(small, (0, 0), sigma * 0.35)
-        wide = cv2.GaussianBlur(small, (0, 0), sigma)
-        gain = lk.glow_intensity * (1.0 + 0.7 * st.bloom) * {"blocks": 0.45, "shafts": 0.7}.get(design, 1.0)
+        tight = cv2.GaussianBlur(glow_src, (0, 0), sigma * 0.35)
+        wide = cv2.GaussianBlur(glow_src, (0, 0), sigma)
+        gain = lk.glow_intensity * (1.0 + 0.7 * st.bloom)
         glow = tight * (1.1 * gain) + wide * (1.9 * gain)
-        mean_lv = float(st.levels.mean()) if len(st.levels) else 0.0
-        if design != "none":
-            amb = 0.05 + 0.1 * mean_lv + 0.06 * st.env
-            glow += self.ambient * np.array(_bgr(lk.main_rgb, amb), np.float32)
+        if any_visible:
+            mean_lv = float(st.levels.mean()) if len(st.levels) else 0.0
+            glow += self.ambient * np.array(_bgr(lk.main_rgb, 0.05 + 0.1 * mean_lv + 0.06 * st.env), np.float32)
         np.clip(glow, 0, 255, out=glow)
         out = cv2.add(core, cv2.resize(glow.astype(np.uint8), (self.w, self.h), interpolation=cv2.INTER_LINEAR))
         if st.blackout > 0.001:
             out = cv2.convertScaleAbs(out, alpha=max(0.0, 1.0 - st.blackout))
-
         if lk.logo_text.strip() and (st.logo_level > 0.003 or st.logo_peak > 0.003):
             self._overlay_logo(out, st, song)
         if st.lyric and st.lyric_alpha > 0.003:
             self._overlay_lyric(out, st, song)
         return out
 
-    # ---- design: vertical blocks --------------------------------------------------------
-    def _slat_top(self, sl, level, st, lk):
-        top_max = (lk.headroom + 0.04) * self.h
-        rest = sl["rest"] * self.h
-        y = rest - (rest - top_max) * min(level, 1.0) * sl["hv"]
-        y -= 0.025 * self.h * lk.audio_react * float(st.bands[sl["member"]]) * (0.5 + 0.5 * math.sin(sl["ph"] + st.beat * 1.7))
-        return max(top_max, y)
-
-    def _draw_blocks(self, core, st: FrameState, song: Song):
+    # ---- element: polygon (hexagon) ------------------------------------------------------
+    def _draw_polygon(self, layer, el, st, song):
         lk = song.look
-        slats = self._layout(len(song.members), max(1, lk.slats_per_member))
-        idle = lk.idle_level
-        mask, fmask = self.mask, self.fmask
-        mask.fill(0)
-        any_flash = bool(st.flash.max() > 0.01) if len(st.flash) else False
-        if any_flash:
-            fmask.fill(0)
-        polys = []
-        for sl in slats:
-            lv = float(st.levels[sl["member"]])
-            b = idle + (1.0 - idle) * min(lv, 1.2)
-            y = self._slat_top(sl, lv, st, lk)
-            poly = np.array([(sl["x0"], y - sl["slope"] / 2), (sl["x1"], y + sl["slope"] / 2),
-                             (sl["x1"], self.h + 2), (sl["x0"], self.h + 2)])
-            p = _fx(poly)
-            cv2.fillPoly(mask, [p], int(255 * min(1.0, b * 0.82)), AA, SHIFT)
-            if any_flash:
-                f = float(st.flash[sl["member"]])
-                if f > 0.01:
-                    cv2.fillPoly(fmask, [p], int(255 * min(1.0, f * b)), AA, SHIFT)
-            polys.append((p, b))
-        cv2.multiply(self.grad, cv2.merge([mask, mask, mask]), dst=core, scale=1.0 / 255.0)
-        if any_flash:
-            acc = cv2.multiply(cv2.merge([fmask, fmask, fmask]), _bgr(lk.accent_rgb) + (0.0,), scale=1.0 / 255.0)
-            cv2.max(core, acc, dst=core)
-        for p, b in polys:   # thin bright edge like a neon tube
-            cv2.polylines(core, [p], True, _bgr(self.outline_rgb, min(1.0, b * 1.05)), self.th(2), AA, SHIFT)
-        if st.sparkle > 0.01:
-            self._sparkles(core, st, lk, [(sl, self._slat_top(sl, float(st.levels[sl["member"]]), st, lk)) for sl in slats])
+        levels, b, flash = self._drive(el, st, song)
+        cols = self._part_colors(el, lk, flash)
+        n = len(b)
+        cx, cy = el.x * self.w, el.y * self.h
+        R = el.size * self.h * (1.0 + el.react_scale * float(np.mean(np.minimum(levels, 1.2))))
+        sides = max(3, int(el.sides))
+        ang = np.radians(el.rotation + el.spin * st.beat - 90.0 + np.arange(sides) * 360.0 / sides)
+        verts = np.stack([cx + R * np.cos(ang), cy + R * np.sin(ang)], 1)
+        mean_b, mean_col = float(np.mean(b)), np.mean(cols, axis=0)
+        if el.fill in ("filled", "gradient"):
+            self.mask.fill(0)
+            cv2.fillPoly(self.mask, [_fx(verts)], int(255 * min(1.0, mean_b * (0.85 if el.fill == "gradient" else 0.5))), AA, SHIFT)
+            self._apply_mask(layer, self.mask, mean_col, cy - R, cy + R + 1, el.fill == "gradient")
+        t = self.th(el.thickness)
+        for i in range(sides):          # one edge per member (wraps if sides != members)
+            k = i % n
+            cv2.line(layer, tuple(_fx(verts[i])), tuple(_fx(verts[(i + 1) % sides])), _bgr(cols[k], float(b[k])), t, AA, SHIFT)
+        for i in range(sides):          # glowing joints
+            k1, k2 = (i - 1) % sides % n, i % n
+            bb = max(float(b[k1]), float(b[k2]))
+            cv2.circle(layer, tuple(_fx(verts[i])), int(t * 0.9 * SCALE), _bgr(self._outline_rgb(cols[k2]), bb), -1, AA, SHIFT)
+        self.bboxes[el.id] = (cx - R, cy - R, cx + R, cy + R)
 
-    def _sparkles(self, core, st, lk, tops):
+    # ---- element: ring ---------------------------------------------------------------------------
+    def _draw_ring(self, layer, el, st, song):
+        lk = song.look
+        levels, b, flash = self._drive(el, st, song)
+        cols = self._part_colors(el, lk, flash)
+        n = len(b)
+        cx, cy = el.x * self.w, el.y * self.h
+        R = el.size * self.h * (1.0 + el.react_scale * float(np.mean(np.minimum(levels, 1.2))))
+        if el.fill in ("filled", "gradient"):
+            self.mask.fill(0)
+            cv2.circle(self.mask, tuple(_fx((cx, cy))), int(R * SCALE), int(255 * min(1.0, float(np.mean(b)) * 0.7)), -1, AA, SHIFT)
+            self._apply_mask(layer, self.mask, np.mean(cols, axis=0), cy - R, cy + R + 1, el.fill == "gradient")
+        t = self.th(el.thickness)
+        start = el.rotation + el.spin * st.beat - 90.0
+        seg = 360.0 / n
+        gap = 3.0 if n > 1 else 0.0
+        for k in range(n):
+            a0 = start + k * seg + gap / 2
+            cv2.ellipse(layer, tuple(_fx((cx, cy))), (int(R * SCALE), int(R * SCALE)), 0, a0, a0 + seg - gap,
+                        _bgr(cols[k], float(b[k])), t, AA, SHIFT)
+        self.bboxes[el.id] = (cx - R, cy - R, cx + R, cy + R)
+
+    # ---- element: vertical blocks ------------------------------------------------------------------
+    def _bars_layout(self, el, n: int):
+        x0 = (el.x - el.size / 2) * self.w
+        width = el.size * self.w
+        key = (el.id, n, el.slats, round(x0), round(width), self.w, self.h)
+        lay = self._layout_cache.get(key)
+        if lay is None:
+            if len(self._layout_cache) > 16:
+                self._layout_cache.clear()
+            rng = np.random.default_rng(7)
+            slats = max(1, int(el.slats))
+            slot = width / max(n, 1)
+            member_gap = slot * 0.09
+            sw_ = (slot - member_gap) / (slats + (slats - 1) * 0.28)
+            lay = []
+            for i in range(n):
+                xm = x0 + i * slot + member_gap / 2
+                for j in range(slats):
+                    xl = xm + j * sw_ * 1.28
+                    ang = 0.0 if rng.random() < 0.3 else rng.uniform(-13, 13)
+                    lay.append(dict(member=i, x0=xl, x1=xl + sw_, slope=math.tan(math.radians(ang)) * sw_,
+                                    rest=rng.uniform(0.45, 0.62), hv=rng.uniform(0.8, 1.0), ph=rng.uniform(0, 6.28)))
+            self._layout_cache[key] = lay
+        return lay
+
+    def _bar_limits(self, el, lk):
+        top_max = max(lk.headroom + 0.04, 1.0 - el.height) * self.h
+        return top_max, self.h
+
+    def _draw_bars(self, layer, el, st, song):
+        lk = song.look
+        levels, b, flash = self._drive(el, st, song)
+        n = len(b)
+        rgb = self.element_rgb(el, lk)
+        top_max, bottom = self._bar_limits(el, lk)
+        span = bottom - top_max
+        slats = self._bars_layout(el, n)
+        mask = self.mask
+        mask.fill(0)
+        polys = []
+        any_flash = bool(flash.max() > 0.01)
+        fmask = np.zeros_like(mask) if any_flash else None
+        bands = st.bands if len(st.bands) == n else np.zeros(n, np.float32)
+        for sl in slats:
+            k = sl["member"]
+            lv = float(levels[k])
+            rest = bottom - span * (1.0 - sl["rest"])
+            y = rest - (rest - top_max) * min(lv, 1.0) * sl["hv"]
+            y -= 0.025 * self.h * lk.audio_react * float(bands[k]) * (0.5 + 0.5 * math.sin(sl["ph"] + st.beat * 1.7))
+            y = max(top_max, y)
+            poly = _fx(np.array([(sl["x0"], y - sl["slope"] / 2), (sl["x1"], y + sl["slope"] / 2),
+                                 (sl["x1"], bottom + 2), (sl["x0"], bottom + 2)]))
+            if el.fill != "outline":
+                cv2.fillPoly(mask, [poly], int(255 * min(1.0, float(b[k]) * 0.82)), AA, SHIFT)
+            if any_flash and flash[k] > 0.01:
+                cv2.fillPoly(fmask, [poly], int(255 * min(1.0, float(flash[k] * b[k]))), AA, SHIFT)
+            polys.append((poly, float(b[k])))
+        if el.fill != "outline":
+            self._apply_mask(layer, mask, rgb, top_max - 0.05 * self.h, bottom, el.fill == "gradient")
+        if any_flash:
+            acc = cv2.multiply(cv2.merge([fmask] * 3), _bgr(lk.accent_rgb) + (0.0,), scale=1.0 / 255.0)
+            cv2.max(layer, acc, dst=layer)
+        orgb = self._outline_rgb(rgb)
+        t = self.th(el.thickness)
+        for poly, bb in polys:
+            cv2.polylines(layer, [poly], True, _bgr(orgb, min(1.0, bb * 1.05)), t, AA, SHIFT)
+        if st.sparkle > 0.01:
+            self._sparkles(layer, st, lk, [(sl, top_max + span * 0.3) for sl in slats])
+        self.bboxes[el.id] = ((el.x - el.size / 2) * self.w, top_max, (el.x + el.size / 2) * self.w, bottom)
+
+    def _sparkles(self, layer, st, lk, tops):
         rng = np.random.default_rng(st.step * 7919 + 13)
-        count = int(3 + 14 * st.sparkle)
-        for _ in range(count):
+        for _ in range(int(3 + 14 * st.sparkle)):
             sl, y = tops[int(rng.integers(0, len(tops)))]
             x = rng.uniform(sl["x0"], sl["x1"])
             yy = y + rng.uniform(0.0, 0.35) * (self.h - y)
             r = 0.006 * self.h * rng.uniform(0.6, 1.4)
             col = _bgr(lk.accent_rgb, st.sparkle * 1.2)
-            cv2.circle(core, tuple(_fx((x, yy))), int(r * SCALE), col, -1, AA, SHIFT)
-            cv2.line(core, tuple(_fx((x - 3 * r, yy))), tuple(_fx((x + 3 * r, yy))), col, self.th(1), AA, SHIFT)
-            cv2.line(core, tuple(_fx((x, yy - 3 * r))), tuple(_fx((x, yy + 3 * r))), col, self.th(1), AA, SHIFT)
+            cv2.circle(layer, tuple(_fx((x, yy))), int(r * SCALE), col, -1, AA, SHIFT)
+            cv2.line(layer, tuple(_fx((x - 3 * r, yy))), tuple(_fx((x + 3 * r, yy))), col, self.th(1), AA, SHIFT)
+            cv2.line(layer, tuple(_fx((x, yy - 3 * r))), tuple(_fx((x, yy + 3 * r))), col, self.th(1), AA, SHIFT)
 
-    # ---- design: light shafts (soft) ------------------------------------------------------
-    def _draw_shafts(self, core, st: FrameState, song: Song):
+    # ---- soft helpers ------------------------------------------------------------------------------
+    def _soft_gradient(self, rgb, top_max, intensity_mask):
+        """intensity_mask (sh, sw) uint8 -> soft BGR float layer, gradient + fade towards the top."""
+        top, bottom = gradient_colors(rgb)
+        yy = np.arange(self.sh, dtype=np.float32)[:, None] / self.sh
+        t = np.clip((yy - top_max / self.h) / max(1e-3, 1.0 - top_max / self.h), 0, 1)
+        col = (np.array(top[::-1], np.float32) * (1 - t)[..., None] + np.array(bottom[::-1], np.float32) * t[..., None])
+        fade = (t ** 1.3)[..., None]
+        return col * (intensity_mask[..., None].astype(np.float32) / 255.0) * fade
+
+    # ---- element: light shafts ------------------------------------------------------------------
+    def _draw_shafts(self, layer, el, st, song):
         lk = song.look
-        n = len(song.members)
-        slot = self.w * 0.94 / n
+        levels, b, flash = self._drive(el, st, song)
+        n = len(b)
+        rgb = self.element_rgb(el, lk)
+        x0 = (el.x - el.size / 2) * self.w
+        slot = el.size * self.w / n
+        top_max, bottom = self._bar_limits(el, lk)
         smask = np.zeros((self.sh, self.sw), np.uint8)
-        top_max = (lk.headroom + 0.04) * self.h
         k = 1.0 / self.DS
-        flash_mix = float(st.flash.max()) if len(st.flash) else 0.0
+        orgb = self._outline_rgb(rgb)
         for i in range(n):
-            lv = float(st.levels[i])
-            b = lk.idle_level + (1 - lk.idle_level) * min(lv, 1.2)
-            cx = self.w * 0.03 + (i + 0.5) * slot
-            y = self.h * 0.72 - (self.h * 0.72 - top_max) * min(lv, 1.0)
+            lv = float(levels[i])
+            cx = x0 + (i + 0.5) * slot
+            y = bottom - (bottom - top_max) * (0.35 + 0.65 * min(lv, 1.0))
             bw, tw = slot * 0.05, slot * 0.2
-            poly = np.array([(cx - bw, self.h), (cx + bw, self.h), (cx + tw, y), (cx - tw, y)]) * k
-            cv2.fillPoly(smask, [_fx(poly)], int(255 * min(1.0, b)), AA, SHIFT)
-            cv2.line(core, tuple(_fx((cx, self.h))), tuple(_fx((cx, y + 0.1 * (self.h - y))))
-                     , _bgr(self.outline_rgb, b * 0.55), self.th(2), AA, SHIFT)
-        soft = cv2.multiply(self.grad_small, cv2.merge([smask, smask, smask]), scale=1.0 / 255.0).astype(np.float32)
-        soft = cv2.GaussianBlur(soft, (0, 0), 6 * self.s / (self.DS / 4) + 1)
-        if flash_mix > 0.01:
-            soft += cv2.merge([smask] * 3).astype(np.float32) / 255.0 * np.array(_bgr(lk.accent_rgb, flash_mix * 0.6), np.float32)
-        if st.sparkle > 0.01:
-            tops = [({"x0": self.w * 0.03 + (i + 0.3) * slot, "x1": self.w * 0.03 + (i + 0.7) * slot, "member": i},
-                     self.h * 0.6) for i in range(n)]
-            self._sparkles(core, st, lk, tops)
-        return soft * self.vfade * 0.9
+            poly = np.array([(cx - bw, bottom), (cx + bw, bottom), (cx + tw, y), (cx - tw, y)]) * k
+            cv2.fillPoly(smask, [_fx(poly)], int(255 * min(1.0, float(b[i]))), AA, SHIFT)
+            cv2.line(layer, tuple(_fx((cx, bottom))), tuple(_fx((cx, y + 0.1 * (bottom - y)))), _bgr(orgb, float(b[i]) * 0.55),
+                     self.th(max(1.0, el.thickness * 0.4)), AA, SHIFT)
+        soft = cv2.GaussianBlur(self._soft_gradient(rgb, top_max, smask), (0, 0), 6 * self.s + 1)
+        if flash.max() > 0.01:
+            soft += cv2.merge([smask] * 3).astype(np.float32) / 255.0 * np.array(_bgr(lk.accent_rgb, float(flash.max()) * 0.6), np.float32)
+        self.bboxes[el.id] = (x0, top_max, x0 + el.size * self.w, bottom)
+        return soft * 0.9
 
-    # ---- design: horizon ------------------------------------------------------------------
-    def _draw_horizon(self, core, st: FrameState, song: Song):
+    # ---- element: horizon ---------------------------------------------------------------------------
+    def _draw_horizon(self, layer, el, st, song):
         lk = song.look
-        n = len(song.members)
-        yh = self.h * 0.84
-        slot = self.w * 0.9 / n
-        mean_lv = float(st.levels.mean())
-        top_rgb, bottom_rgb = gradient_colors(lk.main_rgb)
-        base_b = lk.idle_level + 0.5 * mean_lv
-        cv2.line(core, tuple(_fx((0, yh))), tuple(_fx((self.w, yh))), _bgr(lk.main_rgb, base_b * 0.7), self.th(2), AA, SHIFT)
+        levels, b, flash = self._drive(el, st, song)
+        cols = self._part_colors(el, lk, flash)
+        n = len(b)
+        rgb = self.element_rgb(el, lk)
+        top_rgb, bottom_rgb = gradient_colors(rgb)
+        yh = el.y * self.h
+        x0 = (el.x - el.size / 2) * self.w
+        width = el.size * self.w
+        slot = width / n
+        top_max = max(lk.headroom + 0.04, el.y - el.height) * self.h
+        cv2.line(layer, tuple(_fx((x0, yh))), tuple(_fx((x0 + width, yh))), _bgr(rgb, (el.idle + 0.5 * float(levels.mean())) * 0.7),
+                 self.th(max(1.0, el.thickness * 0.4)), AA, SHIFT)
         soft = np.zeros((self.sh, self.sw, 3), np.float32)
         k = 1.0 / self.DS
-        top_max = (lk.headroom + 0.04) * self.h
         for i in range(n):
-            lv = float(st.levels[i])
-            b = lk.idle_level + (1 - lk.idle_level) * min(lv, 1.2)
-            col = np.array(lk.main_rgb, np.float32) * (1 - st.flash[i]) + np.array(lk.accent_rgb, np.float32) * st.flash[i]
-            cx = self.w * 0.05 + (i + 0.5) * slot
+            lv, bb = float(levels[i]), float(b[i])
+            cx = x0 + (i + 0.5) * slot
             half = slot * (0.12 + 0.22 * min(lv, 1.0))
-            cv2.line(core, tuple(_fx((cx - half, yh))), tuple(_fx((cx + half, yh))), _bgr(col, b * 1.2), self.th(4), AA, SHIFT)
-            # upward haze cone + reflection, both soft
+            cv2.line(layer, tuple(_fx((cx - half, yh))), tuple(_fx((cx + half, yh))), _bgr(cols[i], bb * 1.2), self.th(el.thickness), AA, SHIFT)
             yt = yh - (yh - top_max) * min(lv, 1.0) * 0.9
             cone = np.array([(cx - half * 0.6, yh), (cx + half * 0.6, yh), (cx + half * 1.6, yt), (cx - half * 1.6, yt)]) * k
-            cv2.fillPoly(soft, [_fx(cone)], _bgr(top_rgb, b * 0.35), AA, SHIFT)
+            cv2.fillPoly(soft, [_fx(cone)], _bgr(top_rgb, bb * 0.35), AA, SHIFT)
             refl = np.array([(cx - half * 0.5, yh), (cx + half * 0.5, yh), (cx + half * 0.2, self.h), (cx - half * 0.2, self.h)]) * k
-            cv2.fillPoly(soft, [_fx(refl)], _bgr(bottom_rgb, b * 0.5), AA, SHIFT)
-        if st.sparkle > 0.01:
-            tops = [({"x0": self.w * 0.05 + i * slot, "x1": self.w * 0.05 + (i + 1) * slot, "member": i}, yh * 0.8)
-                    for i in range(n)]
-            self._sparkles(core, st, lk, tops)
-        return cv2.GaussianBlur(soft, (0, 0), 5 * self.s + 1) * (0.35 + 0.65 * self.vfade)
+            cv2.fillPoly(soft, [_fx(refl)], _bgr(bottom_rgb, bb * 0.5), AA, SHIFT)
+        self.bboxes[el.id] = (x0, top_max, x0 + width, min(self.h, yh + 0.1 * self.h))
+        return cv2.GaussianBlur(soft, (0, 0), 5 * self.s + 1)
+
+    # ---- element: beam ------------------------------------------------------------------------------
+    def _draw_beam(self, layer, el, st, song):
+        lk = song.look
+        levels, b, flash = self._drive(el, st, song)
+        cols = self._part_colors(el, lk, flash)
+        n = len(b)
+        cx, cy = el.x * self.w, el.y * self.h
+        L = el.size * self.w * (1.0 + el.react_scale * float(np.mean(np.minimum(levels, 1.2))))
+        a = math.radians(el.rotation + el.spin * st.beat)
+        d = np.array([math.cos(a), math.sin(a)])
+        p0 = np.array([cx, cy]) - d * L / 2
+        seg = L / n
+        gap = min(seg * 0.08, 0.01 * self.w) if n > 1 else 0.0
+        t = self.th(el.thickness)
+        for k in range(n):
+            s0 = p0 + d * (k * seg + gap / 2)
+            s1 = p0 + d * ((k + 1) * seg - gap / 2)
+            cv2.line(layer, tuple(_fx(s0)), tuple(_fx(s1)), _bgr(cols[k], float(b[k])), t, AA, SHIFT)
+        ex = abs(d[0]) * L / 2 + t
+        ey = abs(d[1]) * L / 2 + t
+        self.bboxes[el.id] = (cx - ex, cy - ey, cx + ex, cy + ey)
 
     # ---- band name layer ----------------------------------------------------------------------
     def _logo_layers(self, lk):

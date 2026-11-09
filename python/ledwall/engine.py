@@ -70,6 +70,7 @@ class MotionEngine:
         self.song = song
         self.analysis = analysis
         self.audition_pattern: str | None = None   # pattern id looped instead of the master track
+        self.force_lit = False                      # Elements tab: preview every element fully lit
 
     # ---- time helpers ---------------------------------------------------------
     @property
@@ -271,6 +272,9 @@ class MotionEngine:
             levels = np.maximum(levels, fpk)
             flash = np.maximum(flash, 0.85 * fpk)
             bloom += 1.2 * fpk
+
+        if self.force_lit and n_mem:
+            levels = np.maximum(levels, 1.0)
 
         logo_lv, logo_peak = lane("fx:logo", 0), lane("fx:logo", 2) * lk.logo_peak
         logo_level = max(lk.logo_idle, logo_lv)

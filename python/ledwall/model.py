@@ -31,12 +31,15 @@ PATTERN_COLORS = [
     (200, 140, 255), (255, 220, 90), (90, 240, 210), (255, 130, 200),
 ]
 
-DESIGNS = [
-    ("blocks",  "Vertical Blocks"),
+ELEMENT_TYPES = [
+    ("polygon", "Polygon / Hexagon"),
+    ("ring",    "Ring / Circle"),
+    ("bars",    "Vertical Blocks"),
     ("shafts",  "Light Shafts"),
     ("horizon", "Horizon"),
-    ("none",    "None (band name / lyrics only)"),
+    ("beam",    "Beam / Line"),
 ]
+ELEMENT_LABELS = dict(ELEMENT_TYPES)
 
 
 def new_id() -> str:
@@ -99,18 +102,57 @@ class LyricClip:
 
 
 @dataclass
+class Element:
+    """One visual element of the wall. `driver` decides what lights it:
+    "members" (split: one part per member), "m:<id>", "g:<id>", "always" or "audio"."""
+    id: str
+    name: str
+    type: str = "polygon"
+    visible: bool = True
+    driver: str = "members"
+    x: float = 0.5               # centre, fraction of the wall width
+    y: float = 0.6               # centre, fraction of the wall height
+    size: float = 0.3            # polygon / ring radius (x height) · bars / shafts / horizon / beam width (x width)
+    height: float = 0.7          # bars / shafts: tallest point (x height)
+    rotation: float = 0.0        # degrees
+    spin: float = 0.0            # degrees per beat
+    sides: int = 6
+    thickness: float = 5.0       # px at 1080p
+    fill: str = "outline"        # outline | filled | gradient
+    color: str = "main"          # main | accent | custom
+    custom_rgb: tuple = (255, 255, 255)
+    glow: float = 1.0
+    idle: float = 0.12
+    react_scale: float = 0.08    # polygon / ring grow with the level
+    slats: int = 3               # bars per member
+
+
+def preset_element(kind: str) -> Element:
+    """Ready-made elements offered in the Elements tab."""
+    presets = {
+        "hexagon": dict(name="Main hexagon", type="polygon", sides=6, x=0.5, y=0.58, size=0.3, thickness=7,
+                        fill="outline", glow=1.3, idle=0.15),
+        "polygon": dict(name="Polygon", type="polygon", sides=6, x=0.5, y=0.58, size=0.25),
+        "ring": dict(name="Ring", type="ring", x=0.5, y=0.58, size=0.28, thickness=6),
+        "bars": dict(name="Vertical blocks", type="bars", x=0.5, y=1.0, size=0.94, height=0.72, fill="gradient",
+                     glow=0.45, idle=0.12, thickness=2),
+        "shafts": dict(name="Light shafts", type="shafts", x=0.5, y=1.0, size=0.94, height=0.72, glow=0.7, idle=0.12),
+        "horizon": dict(name="Horizon", type="horizon", x=0.5, y=0.84, size=0.9, height=0.6, idle=0.12),
+        "beam": dict(name="Beam", type="beam", x=0.5, y=0.9, size=0.8, thickness=6, idle=0.12),
+    }
+    return Element(new_id(), **presets.get(kind, presets["polygon"]))
+
+
+@dataclass
 class Look:
-    design: str = "blocks"
     main_rgb: tuple = (255, 168, 40)        # THE song colour, shared by every member
     accent_rgb: tuple = (255, 240, 215)     # flashes / strobes / peaks
     glow_radius: float = 26.0
     glow_intensity: float = 1.0
-    idle_level: float = 0.12                # how visible the design is when nothing plays
     attack_ms: float = 30.0
     release_ms: float = 380.0
     audio_react: float = 0.35
     sensitivity: float = 0.55
-    slats_per_member: int = 3
     headroom: float = 0.24                  # top fraction kept free for lyrics
     strobe_rate: int = 4                    # flashes per beat
     # band name layer (stacks on top of any background)
@@ -135,6 +177,7 @@ class Song:
     patterns: list = field(default_factory=list)
     clips: list = field(default_factory=list)
     lyrics: list = field(default_factory=list)
+    elements: list = field(default_factory=list)
     look: Look = field(default_factory=Look)
     bpm: float = 120.0
     beat_offset: float = 0.0
@@ -172,6 +215,9 @@ class Song:
         for p in self.patterns:
             p.notes = [n for n in p.notes if n.lane != f"g:{gid}"]
 
+    def element(self, eid: str) -> Element | None:
+        return next((e for e in self.elements if e.id == eid), None)
+
     def remove_pattern(self, pid: str):
         self.patterns = [p for p in self.patterns if p.id != pid]
         self.clips = [c for c in self.clips if c.pattern_id != pid]
@@ -190,8 +236,18 @@ class Song:
         def tup(v):
             return tuple(v) if isinstance(v, list) else v
 
+        raw_look = d.get("look", {})
         known = {f.name for f in fields(Look)}
-        look = Look(**{k: tup(v) for k, v in d.get("look", {}).items() if k in known})
+        look = Look(**{k: tup(v) for k, v in raw_look.items() if k in known})
+        ek = {f.name for f in fields(Element)}
+        if "elements" in d:
+            elements = [Element(**{k: tup(v) for k, v in e.items() if k in ek}) for e in d["elements"]]
+        else:   # projects saved before the Elements tab: rebuild from the old single design
+            design = raw_look.get("design", "blocks")
+            elements = [preset_element(design if design != "blocks" else "bars")] if design != "none" else []
+            for e in elements:
+                e.idle = raw_look.get("idle_level", e.idle)
+                e.slats = raw_look.get("slats_per_member", e.slats)
         return Song(
             members=[Member(**m) for m in d.get("members", [])],
             groups=[Group(**g) for g in d.get("groups", [])],
@@ -199,6 +255,7 @@ class Song:
                               notes=[Note(**n) for n in p.get("notes", [])]) for p in d.get("patterns", [])],
             clips=[Clip(**c) for c in d.get("clips", [])],
             lyrics=[LyricClip(**l) for l in d.get("lyrics", [])],
+            elements=elements,
             look=look,
             bpm=d.get("bpm", 120.0),
             beat_offset=d.get("beat_offset", 0.0),
@@ -236,4 +293,4 @@ def default_song() -> Song:
         Clip(new_id(), chorus.id, 0, 48.0, 32.0),
     ]
     lyrics = [LyricClip(new_id(), "lyrics go here in the chorus", 48.0, 16.0)]
-    return Song(members, groups, [intro, groove, chorus, build], clips, lyrics)
+    return Song(members, groups, [intro, groove, chorus, build], clips, lyrics, [preset_element("bars")])

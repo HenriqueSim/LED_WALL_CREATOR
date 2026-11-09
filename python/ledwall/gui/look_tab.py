@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from ..model import DESIGNS
 from .common import ColorButton, LabeledSlider, hint
 
 SONG_COLORS = [
@@ -84,17 +83,11 @@ class LookTab(QWidget):
                        "ambient light are all derived from it."))
 
         # ---- background ----------------------------------------------------------------
-        g_bg = QGroupBox("Background design")
+        g_bg = QGroupBox("Light & motion (all elements)")
         fb = QFormLayout(g_bg)
-        self.combo_design = QComboBox()
-        for key, label in DESIGNS:
-            self.combo_design.addItem(label, key)
-        self.combo_design.currentIndexChanged.connect(lambda i: self._set("design", self.combo_design.itemData(i)))
-        fb.addRow("Design", self.combo_design)
-        self._slider(fb, "Idle visibility", "idle_level", 0, 0.6, 0.01)
+        fb.addRow(hint("The shapes themselves are built in the Elements tab."))
         self._slider(fb, "Glow radius", "glow_radius", 2, 90, 1, "{:.0f}px")
         self._slider(fb, "Glow intensity", "glow_intensity", 0, 3, 0.05)
-        self._slider(fb, "Slats per member", "slats_per_member", 1, 6, 1, "{:.0f}", integer=True)
         self._slider(fb, "Attack", "attack_ms", 0, 1000, 5, "{:.0f}ms")
         self._slider(fb, "Release", "release_ms", 0, 3000, 10, "{:.0f}ms")
         self._slider(fb, "Audio reactivity", "audio_react", 0, 1, 0.01)
@@ -200,7 +193,6 @@ class LookTab(QWidget):
         self.spin_offset.setValue(song.beat_offset)
         self.btn_main.set_rgb(lk.main_rgb)
         self.btn_accent.set_rgb(lk.accent_rgb)
-        self.combo_design.setCurrentIndex(max(0, self.combo_design.findData(lk.design)))
         self.combo_strobe.setCurrentIndex(max(0, self.combo_strobe.findData(lk.strobe_rate)))
         self.combo_logo_col.setCurrentIndex(max(0, self.combo_logo_col.findData(lk.logo_color)))
         if self.edit_logo.text() != lk.logo_text:

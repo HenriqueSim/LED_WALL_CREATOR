@@ -21,7 +21,7 @@ _CLIP_CLIPBOARD: list = []   # [("clip", pattern_id, track, rel_start, length) |
 
 class ArrangementView(QWidget):
     seekRequested = pyqtSignal(float)
-    editPattern = pyqtSignal(str)
+    editPattern = pyqtSignal(str, float, float)   # pattern id, step inside the pattern, song time
     regionChanged = pyqtSignal()
 
     HEADER_W = 96
@@ -451,7 +451,7 @@ class ArrangementView(QWidget):
         item = self.item_at(pos)
         row = self.row_at(pos.y())
         if isinstance(item, Clip):
-            self.editPattern.emit(item.pattern_id)
+            self._open_clip(item, self.x2b(pos.x()))
         elif isinstance(item, LyricClip):
             text, ok = QInputDialog.getText(self, "Lyric", "Text:", text=item.text)
             if ok and text.strip():
@@ -461,6 +461,15 @@ class ArrangementView(QWidget):
             self.place_pattern(self.snap_b(self.x2b(pos.x()), "floor"), row[1])
         elif row == "lyrics":
             self.add_lyric(self.snap_b(self.x2b(pos.x()), "floor"))
+
+    def _open_clip(self, clip: Clip, beat: float):
+        """Open the clip's pattern at the spot that was tapped (which loop pass doesn't matter)."""
+        pat = self.ctl.song.pattern(clip.pattern_id)
+        if not pat:
+            return
+        beat = min(max(beat, clip.start), clip.start + clip.length - 1e-6)
+        step = ((beat - clip.start) * STEPS_PER_BEAT) % pat.steps
+        self.editPattern.emit(pat.id, step, self.eng.b2t(beat))
 
     def _context_menu(self, item, gpos):
         m = QMenu(self)
@@ -482,7 +491,7 @@ class ArrangementView(QWidget):
         elif chosen is a_del:
             self.delete_selected()
         elif chosen is a_edit:
-            self.editPattern.emit(item.pattern_id)
+            self._open_clip(item, item.start)
         elif chosen is a_uniq:
             self.make_unique(item)
         elif chosen is a_fit:
@@ -530,7 +539,7 @@ class ArrangementView(QWidget):
 
 
 class MasterTab(QWidget):
-    editPatternRequested = pyqtSignal(str)
+    editPatternRequested = pyqtSignal(str, float, float)
 
     def __init__(self, ctl, get_playhead, seek, parent=None):
         super().__init__(parent)

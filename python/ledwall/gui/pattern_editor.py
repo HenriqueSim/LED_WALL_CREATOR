@@ -38,6 +38,7 @@ class PatternGrid(QWidget):
         self.selected: list = []
         self.cursor_step = 0
         self.playhead_step: float | None = None
+        self.highlight_bar: int | None = None     # bar opened from the master track
         self._drag = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -53,6 +54,20 @@ class PatternGrid(QWidget):
 
     def refresh_size(self):
         self.setMinimumHeight(self.RULER_H + self.ROW_H * len(self.lanes()) + 2)
+        self.update()
+
+    def focus_step(self, step: float):
+        """Put the edit cursor on `step`, highlight its bar and scroll it into view."""
+        pat = self.pattern
+        if not pat:
+            return
+        self.cursor_step = int(min(max(0, self._snapped(step)), pat.steps - 1))
+        self.highlight_bar = int(step // STEPS_PER_BAR)
+        visible = self.width() - self.HEADER_W
+        x = self.cursor_step * self.px
+        if not (self.scroll_x <= x <= self.scroll_x + visible - 40):
+            self.scroll_x = max(0.0, x - visible * 0.25)
+        self.viewChanged.emit()
         self.update()
 
     def content_width(self) -> float:
@@ -160,6 +175,13 @@ class PatternGrid(QWidget):
                 else:
                     p.setPen(QPen(QColor(0, 0, 0, 120), 1))
                     p.drawRect(rect)
+
+        # bar that was double-clicked on the master track
+        if self.highlight_bar is not None and self.highlight_bar * STEPS_PER_BAR < steps:
+            hx0 = self.x_of(self.highlight_bar * STEPS_PER_BAR)
+            hx1 = self.x_of(min(steps, (self.highlight_bar + 1) * STEPS_PER_BAR))
+            p.fillRect(QRectF(hx0, self.RULER_H, hx1 - hx0, grid_bottom - self.RULER_H), QColor(255, 160, 40, 28))
+            p.fillRect(QRectF(hx0, 0, hx1 - hx0, 3), QColor(255, 160, 40))
 
         # rubber band
         if self._drag and self._drag["mode"] == "rubber":
@@ -524,6 +546,7 @@ class PatternTab(QWidget):
             self.btn_color.set_rgb(p.color)
         self._updating = False
         self.grid.selected = []
+        self.grid.highlight_bar = None
         self.grid.refresh_size()
 
     def _on_select(self, cur, _prev):

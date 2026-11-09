@@ -171,9 +171,13 @@ class MainWindow(QMainWindow):
         self.lbl_mode.setText(f"Auditioning pattern: {pat.name}" if pid and pat else "Playing: Master Track")
         self._dirty = True
 
-    def _edit_pattern(self, pid):
+    def _edit_pattern(self, pid, step=0.0, t=None):
         self.ctl.set_current_pattern(pid)
         self.tabs.setCurrentWidget(self.pattern_tab)
+        if t is not None:
+            self.seek(t)
+        self.pattern_tab.grid.focus_step(step)
+        self.pattern_tab.grid.setFocus()
 
     def _invalidate_renderer(self):
         self.renderer = None

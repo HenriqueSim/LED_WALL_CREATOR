@@ -169,8 +169,9 @@ class FrameRenderer:
             layer.fill(0)
             soft = fn(layer, el, st, song)
             cv2.max(core, layer, dst=core)
-            if el.glow > 0:
-                glow_src += cv2.resize(layer, (self.sw, self.sh), interpolation=cv2.INTER_AREA).astype(np.float32) * el.glow
+            g = el.glow * (0.45 if el.fill != "outline" and el.type in ("polygon", "ring") else 1.0)  # big fills bloom less
+            if g > 0:
+                glow_src += cv2.resize(layer, (self.sw, self.sh), interpolation=cv2.INTER_AREA).astype(np.float32) * g
             if soft is not None:
                 glow_src += soft
 

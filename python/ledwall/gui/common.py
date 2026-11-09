@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPixmap
+from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QColorDialog, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QWidget
 
 DARK_QSS = """
@@ -99,8 +99,18 @@ class LabeledSlider(QWidget):
 
 
 class PreviewCanvas(QLabel):
+    """Shows the rendered frame. When `interactive`, mouse events are reported in frame pixels
+    and `selection` (frame-pixel rect) is outlined - used by the Elements tab."""
+    pressed = pyqtSignal(float, float)
+    dragged = pyqtSignal(float, float)
+    released = pyqtSignal()
+    wheeled = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.interactive = False
+        self.selection: tuple | None = None
+        self._frame_size = (1, 1)
         self.setObjectName("preview")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(320, 90)
@@ -117,7 +127,44 @@ class PreviewCanvas(QLabel):
     def show_frame(self, frame: np.ndarray):
         h, w = frame.shape[:2]
         img = QImage(frame.data, w, h, 3 * w, QImage.Format.Format_BGR888)
+        self._frame_size = (w, h)
         self.setPixmap(QPixmap.fromImage(img))
+
+    def _offset(self) -> QPointF:
+        fw, fh = self._frame_size
+        return QPointF((self.width() - fw) / 2.0, (self.height() - fh) / 2.0)
+
+    def _to_frame(self, pos) -> tuple:
+        o = self._offset()
+        return pos.x() - o.x(), pos.y() - o.y()
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        if self.interactive and self.selection:
+            x0, y0, x1, y1 = self.selection
+            o = self._offset()
+            p = QPainter(self)
+            p.setPen(QPen(QColor(255, 255, 255, 200), 1, Qt.PenStyle.DashLine))
+            p.drawRect(QRectF(o.x() + x0, o.y() + y0, x1 - x0, y1 - y0))
+            p.end()
+
+    def mousePressEvent(self, ev):
+        if self.interactive and ev.button() == Qt.MouseButton.LeftButton:
+            self.pressed.emit(*self._to_frame(ev.position()))
+
+    def mouseMoveEvent(self, ev):
+        if self.interactive and ev.buttons() & Qt.MouseButton.LeftButton:
+            self.dragged.emit(*self._to_frame(ev.position()))
+
+    def mouseReleaseEvent(self, ev):
+        if self.interactive:
+            self.released.emit()
+
+    def wheelEvent(self, ev):
+        if self.interactive:
+            self.wheeled.emit(1 if ev.angleDelta().y() > 0 else -1)
+        else:
+            super().wheelEvent(ev)
 
 
 def hint(text: str) -> QLabel:

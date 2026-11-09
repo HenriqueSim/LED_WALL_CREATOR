@@ -21,6 +21,7 @@ from ..renderer import FrameRenderer
 from .arrangement import MasterTab
 from .band_tab import BandTab
 from .common import PreviewCanvas
+from .elements_tab import ElementsTab
 from .export_tab import ExportTab
 from .look_tab import LookTab
 from .pattern_editor import PatternTab
@@ -97,15 +98,23 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.pattern_tab = PatternTab(self.ctl)
         self.master_tab = MasterTab(self.ctl, lambda: self.current_t, self.seek)
+        self.elements_tab = ElementsTab(self.ctl)
         self.band_tab = BandTab(self.ctl)
         self.look_tab = LookTab(self.ctl)
         self.export_tab = ExportTab(self.ctl)
         self.tabs.addTab(self.pattern_tab, "Pattern Editor")
         self.tabs.addTab(self.master_tab, "Master Track")
+        self.tabs.addTab(self.elements_tab, "Elements")
         self.tabs.addTab(self.band_tab, "Band (members && groups)")
         self.tabs.addTab(self.look_tab, "Look && Song")
         self.tabs.addTab(self.export_tab, "Export")
         self.tabs.currentChanged.connect(lambda *_: self._update_audition())
+        self.elements_tab.previewLitChanged.connect(lambda *_: self._update_audition())
+        self.canvas.pressed.connect(self._canvas_press)
+        self.canvas.dragged.connect(self._canvas_drag)
+        self.canvas.released.connect(lambda: setattr(self, "_el_drag", None))
+        self.canvas.wheeled.connect(self._canvas_wheel)
+        self._el_drag = None
 
         self.pattern_tab.auditionChanged.connect(lambda *_: self._update_audition())
         self.master_tab.editPatternRequested.connect(self._edit_pattern)
@@ -164,11 +173,19 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} — {name}{' *' if self.ctl.dirty else ''}")
 
     def _update_audition(self):
+        in_elements = self.tabs.currentWidget() is self.elements_tab
+        self.ctl.engine.force_lit = in_elements and self.elements_tab.chk_lit.isChecked()
+        self.canvas.interactive = in_elements
+        if not in_elements:
+            self.canvas.selection = None
         on = self.pattern_tab.chk_audition.isChecked() and self.tabs.currentWidget() is self.pattern_tab
         pid = self.ctl.current_pattern_id if on else None
         self.ctl.engine.audition_pattern = pid
         pat = self.ctl.current_pattern
-        self.lbl_mode.setText(f"Auditioning pattern: {pat.name}" if pid and pat else "Playing: Master Track")
+        if in_elements and self.ctl.engine.force_lit:
+            self.lbl_mode.setText("Elements: preview fully lit")
+        else:
+            self.lbl_mode.setText(f"Auditioning pattern: {pat.name}" if pid and pat else "Playing: Master Track")
         self._dirty = True
 
     def _edit_pattern(self, pid, step=0.0, t=None):
@@ -178,6 +195,38 @@ class MainWindow(QMainWindow):
             self.seek(t)
         self.pattern_tab.grid.focus_step(step)
         self.pattern_tab.grid.setFocus()
+
+    # ---- element editing on the preview -------------------------------------------------------
+    def _canvas_press(self, x, y):
+        if not self.renderer:
+            return
+        hit = None
+        for el in self.ctl.song.elements:        # list top = front, so first hit wins
+            bb = self.renderer.bboxes.get(el.id)
+            if el.visible and bb and bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]:
+                hit = el
+                break
+        if hit is None:
+            return
+        self.elements_tab.select(hit.id)
+        self._el_drag = (hit.id, x, y, hit.x, hit.y)
+        self._dirty = True
+
+    def _canvas_drag(self, x, y):
+        if not self._el_drag or not self.renderer:
+            return
+        eid, x0, y0, ex, ey = self._el_drag
+        el = self.ctl.song.element(eid)
+        if el:
+            el.x = min(1.0, max(0.0, ex + (x - x0) / self.renderer.w))
+            el.y = min(1.0, max(0.0, ey + (y - y0) / self.renderer.h))
+            self.ctl.commit("elements", f"{eid}:move")
+
+    def _canvas_wheel(self, d):
+        el = self.elements_tab.element
+        if el:
+            el.size = min(1.0, max(0.02, el.size * (1.06 if d > 0 else 1 / 1.06)))
+            self.ctl.commit("elements", f"{el.id}:size")
 
     def _invalidate_renderer(self):
         self.renderer = None
@@ -287,6 +336,8 @@ class MainWindow(QMainWindow):
             self.renderer = FrameRenderer(pw, ph)
         eng, t = self.ctl.engine, self.current_t
         self.canvas.show_frame(self.renderer.render(eng.state_at(t), self.ctl.song))
+        if self.canvas.interactive:
+            self.canvas.selection = self.renderer.bboxes.get(self.elements_tab.selected_id or "")
         b = eng.t2b(t)
         bar, beat = bar_of(b)
         self.lbl_time.setText(f"{int(t // 60)}:{t % 60:05.2f}   bar {bar}.{beat}")

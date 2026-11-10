@@ -1,5 +1,5 @@
 PyQt6>=6.6
-opencv-python>=4.8
+opencv-python-headless>=4.8,<5
 numpy>=1.26
 librosa>=0.10
 soundfile>=0.12

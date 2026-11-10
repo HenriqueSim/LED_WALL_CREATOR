@@ -11,7 +11,7 @@ import tempfile
 import cv2
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from .audio import FFMPEG
+from .audio import FFMPEG, NO_WINDOW
 from .engine import MotionEngine
 from .renderer import FrameRenderer
 
@@ -93,7 +93,7 @@ class ExportWorker(QThread):
                 cmd += ["-c:v", "libx264", "-preset", "slow", "-profile:v", "high", "-pix_fmt", "yuv420p",
                         "-b:v", f"{br}M", "-maxrate", f"{int(br * 1.5)}M", "-bufsize", f"{br * 2}M",
                         "-r", str(self.fps), "-movflags", "+faststart", self.out_path]
-                proc = subprocess.run(cmd, capture_output=True)
+                proc = subprocess.run(cmd, capture_output=True, **NO_WINDOW)
                 if proc.returncode != 0:
                     raise RuntimeError("ffmpeg failed:\n" + proc.stderr.decode(errors="ignore")[-2000:])
             self.progress.emit(100, "Done")

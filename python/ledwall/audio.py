@@ -13,7 +13,23 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 ANALYSIS_SR = 22050
 HOP = 512
-FFMPEG = shutil.which("ffmpeg")
+
+
+def _find_ffmpeg():
+    """System ffmpeg if installed, else the one shipped with the imageio-ffmpeg package."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+FFMPEG = _find_ffmpeg()
+# no console window flashing up for ffmpeg calls on Windows
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 N_BANDS = 6
 
 
@@ -40,7 +56,7 @@ def _decode_ffmpeg(path: str, sr: int) -> np.ndarray:
     if not FFMPEG:
         raise RuntimeError("ffmpeg not found (needed to decode this file type)")
     cmd = [FFMPEG, "-v", "error", "-i", path, "-vn", "-f", "f32le", "-ac", "1", "-ar", str(sr), "-"]
-    proc = subprocess.run(cmd, capture_output=True, check=False)
+    proc = subprocess.run(cmd, capture_output=True, check=False, **NO_WINDOW)
     if proc.returncode != 0 or not proc.stdout:
         raise RuntimeError(proc.stderr.decode(errors="ignore").strip() or "ffmpeg decode failed")
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()

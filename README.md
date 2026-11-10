@@ -1,9 +1,11 @@
 # LED Wall Creator
 
-A desktop editor for programming LED wall backgrounds for live shows, the way you program drums
-in a DAW. You build the visual elements of a song (a sunset sun, a horizontal beam, a hexagon,
+A free desktop editor (Windows, macOS, Linux) for programming LED wall backgrounds for live shows,
+the way you program drums in a DAW. You build the visual elements of a song (a sunset sun, a horizontal beam, a hexagon,
 vertical bars...), draw *when* each one lights up in a pattern editor, arrange those patterns over
 the song's waveform, and render the result to an `.mp4` for the LED wall (3840×1080 by default).
+
+**[⬇ Download for Windows, macOS or Linux](#install)**
 
 ![The pattern editor](docs/screenshot.png)
 
@@ -95,32 +97,78 @@ tabs below. A typical song goes through them in this order:
 
 Save the project with **File → Save Project** (`.json`). Undo / redo is Ctrl+Z / Ctrl+Shift+Z.
 
-## Install and run
+## Install
 
-Needs Python 3.10+. ffmpeg is optional but recommended (it reads more audio formats, gives a
-better H.264 encode and can put the audio in the video).
+### Option 1: download the app (no Python needed)
+
+Go to the **[Releases page](https://github.com/HenriqueSim/LED_WALL_CREATOR/releases/latest)**
+and download the file for your computer:
+
+| Computer | File | How to start it |
+|---|---|---|
+| **Windows** 10 / 11 | `LEDWallCreator-windows.zip` | Unzip it (right-click → *Extract All*), open the folder and double-click **LEDWallCreator.exe**. If Windows shows *"Windows protected your PC"*, click **More info → Run anyway** (the app isn't signed with a paid certificate). |
+| **macOS** (Apple Silicon: M1 and newer) | `LEDWallCreator-macos.zip` | Unzip it and drag **LEDWallCreator** to *Applications*. The first time, **right-click it → Open → Open** (the app isn't notarised by Apple). If macOS says it is "damaged", run `xattr -cr /Applications/LEDWallCreator.app` in Terminal once. |
+| **Linux** (x86-64) | `LEDWallCreator-linux.tar.gz` | `tar -xzf LEDWallCreator-linux.tar.gz` and run `./LEDWallCreator/LEDWallCreator`. |
+
+Everything is included, ffmpeg too. Keep the files inside the unzipped folder together. The
+download is big (a few hundred MB) because it carries its own copies of Python, Qt, OpenCV and
+the audio analysis libraries.
+
+### Option 2: run it from the source (any computer with Python)
+
+1. Install **Python 3.10 or newer** from [python.org](https://www.python.org/downloads/).
+   On Windows, tick **"Add python.exe to PATH"** in the installer.
+2. Get the code: click **Code → Download ZIP** on this page and unzip it, or
+   `git clone https://github.com/HenriqueSim/LED_WALL_CREATOR.git`.
+3. Start it:
+   - **Windows:** double-click **`run_windows.bat`**
+   - **macOS / Linux:** run **`./run_mac_linux.sh`** in a terminal (on macOS you can also
+     right-click it → Open With → Terminal)
+
+The first start takes a few minutes while it sets up a private Python environment inside the
+folder and downloads the libraries. After that it starts in seconds. To update, download the new
+code and run the script again.
+
+Doing it by hand instead:
 
 ```bash
 cd python
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python led_wall_motion_generator.py            # or: ... my_song.json / ... my_song.wav
 ```
 
-On Linux, install ffmpeg with `sudo apt install ffmpeg`; on macOS, `brew install ffmpeg`.
+### Making a release (maintainers)
+
+The builds are made by GitHub Actions (`.github/workflows/build.yml`). Push a version tag and,
+about 15 minutes later, the Windows, macOS and Linux downloads appear on the Releases page. Each
+build is self-tested first (it opens the window, analyses audio, renders and exports a short
+video):
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+To build one locally: `pip install pyinstaller`, then `pyinstaller LEDWallCreator.spec` inside
+`python/`. The app ends up in `python/dist/`. Run it with `--selftest` to check it.
 
 ## Code layout
 
 ```
 python/
-  led_wall_motion_generator.py   launcher (fonts, theme, main window)
-  fonts/                         Anton (band name font, SIL Open Font License)
+  led_wall_motion_generator.py   launcher (fonts, theme, main window, --selftest)
+  LEDWallCreator.spec            PyInstaller recipe for the standalone app
+  requirements.txt
+  fonts/                         bundled fonts (SIL Open Font License)
   ledwall/
     model.py       song data: members, groups, elements, patterns, clips, lyrics, look
     audio.py       audio decoding + librosa analysis (BPM, beats, energy) in a thread
     engine.py      time -> frame state: evaluates clips / notes, envelopes, per-element levels
     renderer.py    frame state -> image: element drawing, bloom, band name, lyrics (OpenCV)
+    stage.py       stage simulation (band, audience, LED wall / projector lighting)
+    resources.py   bundled files (fonts) for source and packaged runs
     export.py      video export thread (OpenCV VideoWriter / ffmpeg)
     controller.py  undo / redo and change notifications
     gui/           one module per tab + the main window

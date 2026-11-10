@@ -80,7 +80,16 @@ tabs below. A typical song goes through them in this order:
    line). Shift-drag the ruler to set a **loop region**, and tick *Seamless loop* for a background
    that loops without a visible jump.
 
-6. **Export: render the video.** Choose 3840×1080, 1920×1080 or a custom size, and 30 or 60 fps.
+6. **Export: watch it, then render the video.** *Watch it* plays the whole video from the start
+   (with a position slider to scrub), and the preview gets most of the window. **View** switches
+   between the plain wall and a **stage simulation**: your wall behind the band, one silhouette per
+   member in Band order, with the audience in front. **On stage: LED wall** lights the band from
+   behind (backlit silhouettes, light spilling into the haze and onto the floor). **On stage:
+   projector** sends the light from the front: the picture lands on the band and they cast shadows
+   on the screen. *Open big preview window* shows the same view in its own window: F11 or a
+   double-click for fullscreen, Space to play / pause, Esc to close.
+
+   To render, choose 3840×1080, 1920×1080 or a custom size, and 30 or 60 fps.
    The video covers the loop region if there is one, otherwise the whole song. With ffmpeg
    installed you get a high-bitrate H.264 file and can include the song's audio.
 

@@ -1,16 +1,19 @@
-"""Export settings + Render button."""
+"""Export tab: watch the whole video (optionally on a simulated stage, in a big window) and render it."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSpinBox,
+    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QSpinBox,
     QVBoxLayout, QWidget,
 )
 
 from ..audio import FFMPEG
 from ..model import BEATS_PER_BAR
 from .common import hint
+
+VIEWS = [("wall", "LED wall only"), ("led", "On stage: LED wall (light from behind the band)"),
+         ("projector", "On stage: projector (light from the front)")]
 
 RESOLUTIONS = [("3840 × 1080  (Ultra-wide LED banner)", (3840, 1080)),
                ("1920 × 1080  (Full HD)", (1920, 1080)),
@@ -20,10 +23,60 @@ RESOLUTIONS = [("3840 × 1080  (Ultra-wide LED banner)", (3840, 1080)),
 class ExportTab(QWidget):
     renderRequested = pyqtSignal()
     resolutionChanged = pyqtSignal()
+    playFromStartRequested = pyqtSignal()
+    playToggleRequested = pyqtSignal()
+    scrubbed = pyqtSignal(float)          # seconds
+    viewChanged = pyqtSignal()
+    bigWindowRequested = pyqtSignal()
 
     def __init__(self, ctl, parent=None):
         super().__init__(parent)
         self.ctl = ctl
+        self._updating = False
+
+        # ---- playback & stage preview ----------------------------------------------------------
+        gp = QGroupBox("Watch it")
+        fp = QFormLayout(gp)
+        prow = QHBoxLayout()
+        self.btn_from_start = QPushButton("▶  Play from the start")
+        self.btn_from_start.clicked.connect(self.playFromStartRequested.emit)
+        self.btn_play = QPushButton("⏯  Play / pause")
+        self.btn_play.clicked.connect(self.playToggleRequested.emit)
+        prow.addWidget(self.btn_from_start)
+        prow.addWidget(self.btn_play)
+        fp.addRow(prow)
+        srow = QHBoxLayout()
+        self.scrub = QSlider(Qt.Orientation.Horizontal)
+        self.scrub.setRange(0, 10000)
+        self.scrub.valueChanged.connect(self._on_scrub)
+        self.lbl_pos = QLabel("0:00.0")
+        self.lbl_pos.setMinimumWidth(110)
+        srow.addWidget(self.scrub, 1)
+        srow.addWidget(self.lbl_pos)
+        fp.addRow("Position", srow)
+        self.combo_view = QComboBox()
+        for key, label in VIEWS:
+            self.combo_view.addItem(label, key)
+        self.combo_view.currentIndexChanged.connect(lambda *_: self._on_view())
+        fp.addRow("View", self.combo_view)
+        vrow = QHBoxLayout()
+        self.chk_band = QCheckBox("Band on stage")
+        self.chk_band.setChecked(True)
+        self.chk_audience = QCheckBox("Audience")
+        self.chk_audience.setChecked(True)
+        for c in (self.chk_band, self.chk_audience):
+            c.toggled.connect(lambda *_: self.viewChanged.emit())
+            vrow.addWidget(c)
+        vrow.addStretch(1)
+        fp.addRow(vrow)
+        self.btn_window = QPushButton("Open big preview window (F11 = fullscreen)")
+        self.btn_window.clicked.connect(self.bigWindowRequested.emit)
+        fp.addRow(self.btn_window)
+        fp.addRow(hint("The stage view puts the wall behind your band (one silhouette per member, in Band "
+                       "order) so you can judge the look before the show. LED wall: the light comes from "
+                       "behind and the band is backlit. Projector: the picture comes from the front, lands "
+                       "on the band and they cast shadows on the screen."))
+
         g = QGroupBox("Render")
         f = QFormLayout(g)
         self.combo_res = QComboBox()
@@ -70,11 +123,11 @@ class ExportTab(QWidget):
         self.progress.setVisible(False)
         f.addRow(self.progress)
         lay = QHBoxLayout(self)
-        col = QVBoxLayout()
-        col.addWidget(g)
-        col.addStretch(1)
-        lay.addLayout(col)
-        lay.addStretch(1)
+        for grp in (gp, g):
+            col = QVBoxLayout()
+            col.addWidget(grp)
+            col.addStretch(1)
+            lay.addLayout(col, 1)
         ctl.changed.connect(lambda *_: self.update_range())
         self.update_range()
 
@@ -93,6 +146,29 @@ class ExportTab(QWidget):
 
     def fps(self) -> int:
         return int(self.combo_fps.currentText())
+
+    # ---- playback ----------------------------------------------------------------------------
+    def view(self) -> str:
+        return self.combo_view.currentData()
+
+    def _on_view(self):
+        on_stage = self.view() != "wall"
+        self.chk_band.setEnabled(on_stage)
+        self.chk_audience.setEnabled(on_stage)
+        self.viewChanged.emit()
+
+    def _on_scrub(self, v):
+        if self._updating:
+            return
+        s, e = self.ctl.engine.export_range()
+        self.scrubbed.emit(s + (e - s) * v / 10000.0)
+
+    def set_position(self, t: float):
+        s, e = self.ctl.engine.export_range()
+        self._updating = True
+        self.scrub.setValue(int(round(10000 * min(1.0, max(0.0, (t - s) / max(1e-6, e - s))))))
+        self._updating = False
+        self.lbl_pos.setText(f"{int(t // 60)}:{t % 60:04.1f} / {int(e // 60)}:{e % 60:04.1f}")
 
     def update_range(self):
         eng = self.ctl.engine

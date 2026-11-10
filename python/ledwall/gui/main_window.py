@@ -23,6 +23,8 @@ from .band_tab import BandTab
 from .common import PreviewCanvas
 from .elements_tab import ElementsTab
 from .export_tab import ExportTab
+from .stage_window import StageWindow
+from ..stage import StageSimulator
 from .look_tab import LookTab
 from .pattern_editor import PatternTab
 
@@ -126,6 +128,13 @@ class MainWindow(QMainWindow):
         self.master_tab.editPatternRequested.connect(self._edit_pattern)
         self.look_tab.loadAudioRequested.connect(self.load_audio_dialog)
         self.export_tab.renderRequested.connect(self.render_video)
+        self.export_tab.playFromStartRequested.connect(self.play_from_start)
+        self.export_tab.playToggleRequested.connect(self.toggle_play)
+        self.export_tab.scrubbed.connect(self.seek)
+        self.export_tab.viewChanged.connect(lambda: setattr(self, "_dirty", True))
+        self.export_tab.bigWindowRequested.connect(self.open_big_window)
+        self.big_window = None
+        self._stage_cache = {}      # target -> (StageSimulator, FrameRenderer)
         self.export_tab.resolutionChanged.connect(self._invalidate_renderer)
 
         split = QSplitter(Qt.Orientation.Vertical)
@@ -135,6 +144,9 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 3)
         split.setSizes([360, 600])
         self.setCentralWidget(split)
+        self.split = split
+        self._split_before_export = None
+        self.tabs.currentChanged.connect(self._on_tab_for_split)
         self.statusBar().showMessage("Space = play/pause · draw notes in the Pattern Editor · arrange them on the Master Track")
 
         sc = QShortcut(QKeySequence("Space"), self)
@@ -421,6 +433,56 @@ class MainWindow(QMainWindow):
             self.player.setPosition(int(self.current_t * 1000))
         self._dirty = True
 
+    def _on_tab_for_split(self, _i):
+        """The Export tab is about watching: give the preview most of the window while it is open."""
+        in_export = self.tabs.currentWidget() is self.export_tab
+        if in_export and self._split_before_export is None:
+            self._split_before_export = self.split.sizes()
+            total = sum(self._split_before_export)
+            self.split.setSizes([int(total * 0.62), total - int(total * 0.62)])
+        elif not in_export and self._split_before_export is not None:
+            self.split.setSizes(self._split_before_export)
+            self._split_before_export = None
+        self._dirty = True
+
+    def play_from_start(self):
+        self.pause()
+        self.seek(self.ctl.engine.export_range()[0])
+        self.play()
+
+    def open_big_window(self):
+        if self.big_window is None:
+            self.big_window = StageWindow()
+            self.big_window.togglePlay.connect(self.toggle_play)
+            self.big_window.closed.connect(lambda: setattr(self, "_dirty", True))
+        self.big_window.show()
+        self.big_window.raise_()
+        self.big_window.activateWindow()
+        self._dirty = True
+
+    def _render_view(self, target: str, canvas, st, t: float, max_w: int):
+        """Render the Export view (wall only / on stage) for one canvas."""
+        song = self.ctl.song
+        tw, th = self.export_tab.resolution()
+        view = self.export_tab.view()
+        if view == "wall":
+            pw, ph = canvas.preview_size(tw / th, max_w)
+            sim = None
+        else:
+            pw, ph = canvas.preview_size(16 / 9, max_w)
+        cached = self._stage_cache.get(target)
+        if not cached or cached[2] != (pw, ph, tw, th, view):
+            sim = StageSimulator(pw, ph) if view != "wall" else None
+            ww, wh = sim.wall_size(th / tw) if sim else (pw, ph)
+            cached = (sim, FrameRenderer(ww, wh), (pw, ph, tw, th, view))
+            self._stage_cache[target] = cached
+        sim, rend, _ = cached
+        frame = rend.render(st, song)
+        if sim is not None:
+            frame = sim.compose(frame, len(song.members), view, t,
+                                self.export_tab.chk_band.isChecked(), self.export_tab.chk_audience.isChecked())
+        canvas.show_frame(frame)
+
     def go_home(self):
         r = self.ctl.song.region
         self.seek(r[0] if r else 0.0)
@@ -462,7 +524,15 @@ class MainWindow(QMainWindow):
             self.renderer = FrameRenderer(pw, ph)
         eng, t = self.ctl.engine, self.current_t
         t_frame = self.free_clock.elapsed() / 1000.0 if (eng.preview_pulse and not self.playing) else t
-        self.canvas.show_frame(self.renderer.render(eng.state_at(t_frame), self.ctl.song))
+        st = eng.state_at(t_frame)
+        in_export = self.tabs.currentWidget() is self.export_tab
+        if in_export:
+            self._render_view("main", self.canvas, st, t_frame, 1400)
+        else:
+            self.canvas.show_frame(self.renderer.render(st, self.ctl.song))
+        if self.big_window is not None and self.big_window.isVisible():
+            self._render_view("big", self.big_window.canvas, st, t_frame, 1920)
+        self.export_tab.set_position(t)
         if self.canvas.interactive:
             et = self.elements_tab
             if et.logo_selected:
@@ -596,4 +666,6 @@ class MainWindow(QMainWindow):
                 if isinstance(wk, ExportWorker):
                     wk.cancel()
                 wk.wait(3000)
+        if self.big_window is not None:
+            self.big_window.close()
         super().closeEvent(ev)

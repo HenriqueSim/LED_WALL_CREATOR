@@ -78,7 +78,8 @@ class MotionEngine:
         self.analysis = analysis
         self.audition_pattern: str | None = None   # pattern id looped instead of the master track
         self.preview_pulse = False                  # Elements tab: every element in the scene, pulsing
-        self.preview_elements: set | None = None    # ... these elements (the pattern being edited)
+        self.preview_elements: set | None = None    # ... these elements (the one being edited)
+        self.preview_logo = True                    # ... and the band name
 
     # ---- time helpers ---------------------------------------------------------
     @property
@@ -308,12 +309,12 @@ class MotionEngine:
                 all_fl = np.maximum(all_fl, flash)
         levels, flash = all_lv, all_fl
 
-        if lk.logo_always or self.preview_pulse:
-            logo_level = 1.0
+        if self.preview_pulse:
+            logo_level, logo_peak = (1.0 if self.preview_logo else 0.0), 0.0
         else:
-            logo_level = max(lk.logo_idle, lane("fx:logo", 0))
-        # Band Name Light: a glow held while the note lasts plus a flash at each note start
-        logo_peak = lane("fx:logo_glow", 0) * lk.logo_glow + lane("fx:logo_glow", 2) * lk.logo_peak
+            logo_level = 1.0 if lk.logo_always else max(lk.logo_idle, lane("fx:logo", 0))
+            # Band Name Light: a glow held while the note lasts plus a flash at each note start
+            logo_peak = lane("fx:logo_glow", 0) * lk.logo_glow + lane("fx:logo_glow", 2) * lk.logo_peak
 
         lyric, lyric_alpha = "", 0.0
         for ly in song.lyrics:

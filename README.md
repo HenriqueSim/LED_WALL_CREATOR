@@ -33,10 +33,10 @@ tabs below. A typical song goes through them in this order:
    (lines, dashed lines, rectangles, circles, arcs, polygons, rays). Each shape has its own size,
    position, angle, thickness and fill. Click a shape in the preview to pick it, drag it to move it
    and use the wheel to resize it. Each type shows only its own settings, e.g. a hexagon's radius and sides,
-   the number of bars, or a beam's segments and parallel lines. In the preview you can click an
-   element to select it, drag it to move it and use the mouse wheel to resize it. While you're in
-   this tab the preview pulses the selected pattern's elements on the beat, so you can see the
-   effect. The top of the list is the front layer.
+   the number of bars, or a beam's segments and parallel lines. While you're in this tab the
+   preview shows only the element you're editing, pulsing on the beat so you can see the effect
+   (untick *Preview* to see the song at the playhead instead). Drag it in the preview to move it
+   and use the mouse wheel to resize it. The top of the list is the front layer.
 
    Elements are shared by the whole song (an element looks the same everywhere it is used), and
    **each pattern chooses which ones it uses**: pick the pattern at the top of the list and tick

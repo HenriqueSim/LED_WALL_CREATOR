@@ -140,7 +140,7 @@ class ElementsTab(QWidget):
             b.clicked.connect(lambda _=False, dd=d: self.move(dd))
             row2.addWidget(b)
         ll.addLayout(row2)
-        self.chk_pulse = QCheckBox("Preview: every element pulsing")
+        self.chk_pulse = QCheckBox("Preview: the selected element, pulsing")
         self.chk_pulse.setChecked(True)
         self.chk_pulse.setToolTip("Unchecked: the preview shows the song at the playhead instead")
         self.chk_pulse.toggled.connect(self.previewModeChanged.emit)

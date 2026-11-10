@@ -278,7 +278,7 @@ class MainWindow(QMainWindow):
         """True when (x, y) is on the band name's letters (or their halo)."""
         r = self.renderer
         bb = getattr(r, "logo_bbox", None)
-        if not bb or not (bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]) or not r._logo:
+        if not bb or not r.logo_drawn or not (bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]) or not r._logo:
             return False
         x0, y0, x1, y1, _fill, _tight, _wide, halo = r._logo
         ix, iy = int(x) - x0, int(y) - y0
@@ -525,12 +525,15 @@ class MainWindow(QMainWindow):
             self.renderer = FrameRenderer(pw, ph)
         eng, t = self.ctl.engine, self.current_t
         t_frame = self.free_clock.elapsed() / 1000.0 if (eng.preview_pulse and not self.playing) else t
-        if eng.preview_pulse:   # Elements tab: the selected pattern's elements, plus the one being edited
-            pat = self.ctl.current_pattern
-            ids = {e.id for e in self.ctl.song.pattern_elements(pat)} if pat else set()
-            if self.elements_tab.element is not None:
-                ids.add(self.elements_tab.element.id)
-            eng.preview_elements = ids
+        if eng.preview_pulse:   # Elements tab: only what is being edited
+            et = self.elements_tab
+            eng.preview_logo = et.logo_selected
+            if et.logo_selected:      # a dark cut-out name needs the pattern's elements behind it to be seen
+                pat = self.ctl.current_pattern
+                cut = self.ctl.song.look.logo_color == "cutout" and pat
+                eng.preview_elements = {e.id for e in self.ctl.song.pattern_elements(pat)} if cut else set()
+            else:
+                eng.preview_elements = {et.element.id} if et.element is not None else set()
         st = eng.state_at(t_frame)
         in_export = self.tabs.currentWidget() is self.export_tab
         if in_export:

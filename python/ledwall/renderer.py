@@ -76,6 +76,7 @@ class FrameRenderer:
         self._sun_cache: dict = {}
         self._logo_key = None
         self.logo_bbox = None
+        self.logo_drawn = False
         self.shape_bboxes: dict = {}    # (element id, shape index) -> bbox, for picking shapes in the GUI
         self._lyric_cache: dict = {}
         self.bboxes: dict = {}          # element id -> (x0, y0, x1, y1) in pixels, for hit-testing in the GUI
@@ -197,9 +198,10 @@ class FrameRenderer:
         if st.blackout > 0.001:
             out = cv2.convertScaleAbs(out, alpha=max(0.0, 1.0 - st.blackout))
         if not lk.logo_text.strip():
-            self.logo_bbox = None
+            self.logo_bbox, self.logo_drawn = None, False
         else:
-            if st.logo_level > 0.003 or st.logo_peak > 0.003:
+            self.logo_drawn = st.logo_level > 0.003 or st.logo_peak > 0.003
+            if self.logo_drawn:
                 self._overlay_logo(out, st, song)
             else:
                 self._logo_layers(lk)        # keeps logo_bbox current for picking in the GUI

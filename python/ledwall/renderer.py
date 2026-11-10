@@ -187,9 +187,11 @@ class FrameRenderer:
         wide = cv2.GaussianBlur(glow_src, (0, 0), sigma)
         gain = lk.glow_intensity * (1.0 + 0.7 * st.bloom)
         glow = tight * (1.1 * gain) + wide * (1.9 * gain)
-        if any_visible:
+        if any_visible and lk.ambient > 0:
+            # ambient wash: a constant base, more while elements are lit, pulsing with the music
             mean_lv = float(st.levels.mean()) if len(st.levels) else 0.0
-            glow += self.ambient * np.array(_bgr(lk.main_rgb, 0.05 + 0.1 * mean_lv + 0.06 * st.env), np.float32)
+            k = lk.ambient * (0.05 + 0.1 * mean_lv + 0.06 * lk.ambient_pulse * st.env)
+            glow += self.ambient * np.array(_bgr(lk.main_rgb, k), np.float32)
         np.clip(glow, 0, 255, out=glow)
         out = cv2.add(core, cv2.resize(glow.astype(np.uint8), (self.w, self.h), interpolation=cv2.INTER_LINEAR))
         if st.blackout > 0.001:

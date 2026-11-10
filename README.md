@@ -18,7 +18,9 @@ tabs below. A typical song goes through them in this order:
    where bar 1 starts. Fix them by hand if needed (½ / ×2 for half or double tempo, *Auto* to go
    back to the detected values). Pick **one colour for the song**: every element and every member
    share it. The *Pastel* swatches suit a soft, sunset look. The same tab holds the global light
-   settings (glow, attack / release, audio reactivity, strobe rate) and the lyrics settings
+   settings (glow, attack / release, audio reactivity, strobe rate, and the **ambient glow**: the soft
+   wash of the song colour rising from the bottom of the wall, with its intensity (0 = off) and how much
+   it pulses with the music) and the lyrics settings
    (room at the top, size, font).
 
 2. **Band: members and groups.** List the members from left to right as they stand on stage, and

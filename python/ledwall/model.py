@@ -237,6 +237,8 @@ class Look:
     sensitivity: float = 0.55
     headroom: float = 0.24                  # top fraction kept free for lyrics
     strobe_rate: int = 4                    # flashes per beat
+    ambient: float = 1.0                    # soft wash of the song colour from the bottom centre (0 = off)
+    ambient_pulse: float = 1.0              # how much that wash pulses with the music's loudness
     # band name layer (stacks on top of any background)
     logo_text: str = "band name"
     logo_stacked: bool = False              # old flag, see logo_layout

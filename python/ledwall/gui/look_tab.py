@@ -101,6 +101,12 @@ class LookTab(QWidget):
         self._slider(fb, "Release", "release_ms", 0, 3000, 10, "{:.0f}ms")
         self._slider(fb, "Audio reactivity", "audio_react", 0, 1, 0.01)
         self._slider(fb, "Beat sensitivity", "sensitivity", 0, 1, 0.01)
+        self._slider(fb, "Ambient glow", "ambient", 0, 6, 0.05)
+        self._slider(fb, "Ambient pulse (music)", "ambient_pulse", 0, 4, 0.05)
+        self._widgets["ambient"].setToolTip("The soft wash of the song colour rising from the bottom centre of the "
+                                            "wall. 0 turns it off.")
+        self._widgets["ambient_pulse"].setToolTip("How much the ambient wash breathes with the loudness of the "
+                                                  "music. 0 = steady.")
         self.combo_strobe = QComboBox()
         for n in (1, 2, 4, 8):
             self.combo_strobe.addItem(f"{n} per beat", n)

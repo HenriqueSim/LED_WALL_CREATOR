@@ -15,6 +15,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=hidden,
     excludes=["tkinter", "matplotlib", "IPython", "pytest"],
+    runtime_hooks=["pyi_rth_cv2.py"],    # macOS .app: load OpenCV's compiled module directly
     noarchive=False,
 )
 pyz = PYZ(a.pure)

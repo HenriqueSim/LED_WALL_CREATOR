@@ -68,6 +68,8 @@ def selftest() -> int:
         fonts = load_bundled_fonts()
         print("fonts:", ", ".join(fonts))
         print("ffmpeg:", FFMPEG)
+        import cv2
+        print("opencv:", cv2.__version__, getattr(cv2, "__file__", ""))
         tmp = tempfile.mkdtemp()
         sr = 22050                                   # 6 s of clicks at 120 BPM
         y = np.zeros(sr * 6, np.float32)

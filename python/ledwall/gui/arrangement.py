@@ -10,6 +10,7 @@ import numpy as np
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
+    QDoubleSpinBox,
     QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -23,6 +24,7 @@ class ArrangementView(QWidget):
     seekRequested = pyqtSignal(float)
     editPattern = pyqtSignal(str, float, float)   # pattern id, step inside the pattern, song time
     regionChanged = pyqtSignal()
+    audioMoved = pyqtSignal()                     # the audio was dragged (bar 1 offset changed)
 
     HEADER_W = 96
     RULER_H = 22
@@ -66,11 +68,28 @@ class ArrangementView(QWidget):
             return "lyrics"
         return None
 
+    # The view runs in grid time g (seconds from bar 1, so bars and clips stay put when the audio is
+    # moved); audio time t = g + beat offset. view_start / view_end are in grid time.
+    @property
+    def offset(self) -> float:
+        return self.ctl.song.beat_offset
+
+    @property
+    def pps(self) -> float:
+        return max(1, self.width() - self.HEADER_W) / max(1e-6, self.view_end - self.view_start)
+
     def t2x(self, t: float) -> float:
-        return self.HEADER_W + (t - self.view_start) / (self.view_end - self.view_start) * (self.width() - self.HEADER_W)
+        return self.HEADER_W + (t - self.offset - self.view_start) * self.pps
 
     def x2t(self, x: float) -> float:
-        return self.view_start + (x - self.HEADER_W) / max(1, self.width() - self.HEADER_W) * (self.view_end - self.view_start)
+        return self.view_start + (x - self.HEADER_W) / self.pps + self.offset
+
+    def g_domain(self) -> tuple:
+        """Scrollable range in grid time: from the start of the audio (or bar 1) to the end."""
+        song, eng = self.ctl.song, self.eng
+        dur = eng.duration
+        end_g = max(dur - self.offset, song.song_end_beats() * eng.period)
+        return min(0.0, -self.offset) - 1.0, end_g + 2.0
 
     def b2x(self, b: float) -> float:
         return self.t2x(self.eng.b2t(b))
@@ -87,14 +106,17 @@ class ArrangementView(QWidget):
         return f(b / u) * u
 
     def reset_view(self):
-        self.view_start, self.view_end = 0.0, max(10.0, self.eng.duration)
+        g0, g1 = self.g_domain()
+        self.view_start, self.view_end = g0, max(g0 + 10.0, g1)
         self.update()
 
     def set_playhead(self, t: float):
         self.playhead = t
+        g = t - self.offset
         span = self.view_end - self.view_start
-        if t > self.view_end or t < self.view_start:
-            self.view_start = max(0.0, min(t - span * 0.1, self.eng.duration - span))
+        if (g > self.view_end or g < self.view_start) and not (self._drag and self._drag.get("mode") == "audio"):
+            g0, g1 = self.g_domain()
+            self.view_start = max(g0, min(g - span * 0.1, g1 - span))
             self.view_end = self.view_start + span
         self.update()
 
@@ -137,7 +159,10 @@ class ArrangementView(QWidget):
             p.drawLine(QPointF(x1, 0), QPointF(x1, h))
 
         # bar grid
-        b0, b1 = eng.t2b(self.view_start), eng.t2b(self.view_end)
+        b0, b1 = self.view_start / eng.period, self.view_end / eng.period
+        x_bar1 = self.b2x(0)
+        if x_bar1 > self.HEADER_W:      # before bar 1
+            p.fillRect(QRectF(self.HEADER_W, self.RULER_H + self.WAVE_H, x_bar1 - self.HEADER_W, h), QColor(0, 0, 0, 120))
         px_per_bar = (self.b2x(4) - self.b2x(0))
         step_bars = 1 if px_per_bar > 22 else (4 if px_per_bar > 6 else 16)
         p.setFont(QFont("Sans", 8))
@@ -147,7 +172,7 @@ class ArrangementView(QWidget):
             x = self.b2x(bar * 4)
             if x < self.HEADER_W:
                 continue
-            p.setPen(QPen(QColor(55, 55, 55) if bar % 4 == 0 else QColor(32, 32, 32), 1))
+            p.setPen(QPen(QColor(150, 110, 60) if bar == 0 else (QColor(55, 55, 55) if bar % 4 == 0 else QColor(32, 32, 32)), 1))
             p.drawLine(QPointF(x, self.RULER_H), QPointF(x, h))
             p.setPen(QColor(150, 150, 150))
             p.drawText(QPointF(x + 2, 14), str(bar + 1))
@@ -163,15 +188,32 @@ class ArrangementView(QWidget):
         ww = w - self.HEADER_W
         mid = self.RULER_H + self.WAVE_H / 2
         if a is not None and ww > 2:
+            # the audio is an item you can drag (freely, no snapping) to line it up with the grid
+            ax0, ax1 = max(self.HEADER_W, self.t2x(0.0)), min(w, self.t2x(a.duration))
+            dragging = bool(self._drag and self._drag.get("mode") == "audio" and self._drag.get("moved"))
+            if ax1 > ax0:
+                p.fillRect(QRectF(ax0, self.RULER_H + 1, ax1 - ax0, self.WAVE_H - 2),
+                           QColor(70, 45, 15) if dragging else QColor(40, 28, 12))
             n = len(a.peaks_max)
             xs = np.arange(ww + 1)
-            ts = self.view_start + xs / ww * (self.view_end - self.view_start)
+            ts = self.view_start + xs / ww * (self.view_end - self.view_start) + self.offset
+            inside = (ts[:-1] >= 0) & (ts[:-1] < a.duration)
             idx = np.clip((ts / a.duration * n).astype(np.int64), 0, n - 1)
-            mx = np.maximum.reduceat(a.peaks_max, idx[:-1])
-            mn = np.minimum.reduceat(a.peaks_min, idx[:-1])
+            idx = np.maximum(idx[:-1], 0)
+            idx = np.maximum.accumulate(idx)
+            mx = np.maximum.reduceat(a.peaks_max, idx)
+            mn = np.minimum.reduceat(a.peaks_min, idx)
             sc = self.WAVE_H / 2 * 0.92 / max(1e-6, float(np.max(np.abs(a.peaks_max))))
-            p.setPen(QPen(QColor(255, 140, 20, 160), 1))
-            p.drawLines([QLineF(self.HEADER_W + i, mid - mx[i] * sc, self.HEADER_W + i, mid - mn[i] * sc) for i in range(ww)])
+            p.setPen(QPen(QColor(255, 170, 60, 220) if dragging else QColor(255, 140, 20, 160), 1))
+            p.drawLines([QLineF(self.HEADER_W + i, mid - mx[i] * sc, self.HEADER_W + i, mid - mn[i] * sc)
+                         for i in range(ww) if inside[i]])
+            if ax1 > ax0:
+                p.setPen(QPen(QColor(255, 170, 60, 140), 1))
+                p.drawRect(QRectF(ax0, self.RULER_H + 1, ax1 - ax0, self.WAVE_H - 2))
+            if dragging:
+                p.setPen(QColor(255, 220, 160))
+                p.drawText(QRectF(ax0 + 4, self.RULER_H + 2, 300, 14), Qt.AlignmentFlag.AlignLeft,
+                           f"bar 1 at {self.offset:+.3f} s")
         else:
             p.setPen(QColor(90, 90, 90))
             p.drawText(QRectF(self.HEADER_W, self.RULER_H, ww, self.WAVE_H), Qt.AlignmentFlag.AlignCenter,
@@ -342,6 +384,12 @@ class ArrangementView(QWidget):
         row = self.row_at(pos.y())
         shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         ctrl = bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if row == "wave" and not shift and self.ctl.analysis is not None and ev.button() == Qt.MouseButton.LeftButton:
+            a = self.ctl.analysis
+            if self.t2x(0.0) <= pos.x() <= self.t2x(a.duration):
+                self._drag = dict(mode="audio", x0=pos.x(), off0=self.offset, moved=False)
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                return
         if row in ("ruler", "wave"):
             if ev.button() != Qt.MouseButton.LeftButton:
                 return
@@ -393,11 +441,20 @@ class ArrangementView(QWidget):
         if not d:
             item = self.item_at(pos)
             cur = Qt.CursorShape.ArrowCursor
+            if self.row_at(pos.y()) == "wave" and self.ctl.analysis is not None and pos.x() > self.HEADER_W:
+                cur = Qt.CursorShape.OpenHandCursor
             if item:
                 cur = Qt.CursorShape.SizeHorCursor if pos.x() > self.rect_of(item).right() - self.EDGE_PX else Qt.CursorShape.SizeAllCursor
             self.setCursor(cur)
             return
-        if d["mode"] == "seek":
+        if d["mode"] == "audio":
+            dx = pos.x() - d["x0"]
+            if abs(dx) > 3 or d["moved"]:
+                d["moved"] = True
+                # audio moves right by dx -> bar 1 is earlier in the audio (no snapping)
+                self.ctl.song.set_timing(beat_offset=round(d["off0"] - dx / self.pps, 4))
+                self.audioMoved.emit()
+        elif d["mode"] == "seek":
             self.seekRequested.emit(max(0.0, self.x2t(pos.x())))
         elif d["mode"] == "region":
             t1 = self.eng.b2t(self.snap_b(self.x2b(pos.x())))
@@ -430,9 +487,18 @@ class ArrangementView(QWidget):
                             [l for l in song.lyrics if d["rect"].intersects(self.lyric_rect(l))]
         self.update()
 
-    def mouseReleaseEvent(self, _ev):
+    def mouseReleaseEvent(self, ev):
         d, self._drag = self._drag, None
         if not d:
+            return
+        if d["mode"] == "audio":
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            if d["moved"]:
+                self.ctl.commit("look", "offset")
+                self.ctl.changed.emit("arrangement")
+            else:   # a click without moving seeks, like on the ruler
+                self.seekRequested.emit(max(0.0, self.x2t(ev.position().x())))
+            self.update()
             return
         if d["mode"] == "region":
             r = self.ctl.song.region
@@ -503,17 +569,18 @@ class ArrangementView(QWidget):
     def wheelEvent(self, ev):
         delta = ev.angleDelta().y() or ev.angleDelta().x()
         span = self.view_end - self.view_start
-        dur = max(self.eng.duration, 1.0)
+        g0, g1 = self.g_domain()
+        dom = max(g1 - g0, 1.0)
         if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            pivot = self.x2t(ev.position().x())
-            new_span = float(np.clip(span * (0.8 if delta > 0 else 1.25), 2.0, dur))
+            pivot = self.x2t(ev.position().x()) - self.offset
+            new_span = float(np.clip(span * (0.8 if delta > 0 else 1.25), 0.5, dom))
             frac = (pivot - self.view_start) / span
-            self.view_start = max(0.0, pivot - frac * new_span)
-            self.view_end = min(dur, self.view_start + new_span)
-            self.view_start = max(0.0, self.view_end - new_span)
+            self.view_start = max(g0, pivot - frac * new_span)
+            self.view_end = min(g1, self.view_start + new_span)
+            self.view_start = max(g0, self.view_end - new_span)
         else:
             shift = -np.sign(delta) * span * 0.1
-            self.view_start = float(np.clip(self.view_start + shift, 0, max(0.0, dur - span)))
+            self.view_start = float(np.clip(self.view_start + shift, g0, max(g0, g1 - span)))
             self.view_end = self.view_start + span
         self.update()
 
@@ -536,6 +603,108 @@ class ArrangementView(QWidget):
             self.update()
         else:
             super().keyPressEvent(ev)
+
+
+class TempoBar(QWidget):
+    """Bottom bar of the Master Track (like Reaper's): tempo and where bar 1 starts in the audio."""
+    changed = pyqtSignal()
+
+    def __init__(self, ctl, parent=None):
+        super().__init__(parent)
+        self.ctl = ctl
+        self._updating = False
+        self._taps: list = []
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(4, 2, 4, 2)
+        lay.addWidget(QLabel("BPM"))
+        self.spin_bpm = QDoubleSpinBox()
+        self.spin_bpm.setRange(20, 300)
+        self.spin_bpm.setDecimals(3)
+        self.spin_bpm.setSingleStep(0.1)
+        self.spin_bpm.setKeyboardTracking(False)
+        self.spin_bpm.setToolTip("Tempo. Mouse wheel / arrows change it by 0.1; type an exact value.")
+        self.spin_bpm.valueChanged.connect(self._on_bpm)
+        lay.addWidget(self.spin_bpm)
+        for text, tip, fn in (("½", "Half tempo", lambda: self.spin_bpm.setValue(self.spin_bpm.value() / 2)),
+                              ("×2", "Double tempo", lambda: self.spin_bpm.setValue(self.spin_bpm.value() * 2)),
+                              ("Tap", "Tap along with the music (4+ taps)", self._tap)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setFixedWidth(40 if text != "Tap" else 48)
+            b.clicked.connect(fn)
+            lay.addWidget(b)
+        lay.addSpacing(14)
+        lay.addWidget(QLabel("Bar 1 at"))
+        self.spin_off = QDoubleSpinBox()
+        self.spin_off.setRange(-60, 600)
+        self.spin_off.setDecimals(3)
+        self.spin_off.setSingleStep(0.005)
+        self.spin_off.setSuffix(" s")
+        self.spin_off.setKeyboardTracking(False)
+        self.spin_off.setToolTip("Where bar 1 of the grid falls in the audio. Or drag the waveform.")
+        self.spin_off.valueChanged.connect(self._on_offset)
+        lay.addWidget(self.spin_off)
+        for text, d in (("◀◀", -0.05), ("◀", -0.005), ("▶", 0.005), ("▶▶", 0.05)):
+            b = QPushButton(text)
+            b.setFixedWidth(34)
+            b.setToolTip(f"Move the audio {'left' if d < 0 else 'right'} by {abs(d) * 1000:.0f} ms")
+            b.clicked.connect(lambda _=False, dd=d: self._nudge(dd))
+            lay.addWidget(b)
+        lay.addSpacing(14)
+        self.btn_auto = QPushButton("Auto-detect")
+        self.btn_auto.setToolTip("Use the BPM and first beat detected in the audio")
+        self.btn_auto.clicked.connect(self._auto)
+        lay.addWidget(self.btn_auto)
+        self.lbl_det = QLabel()
+        self.lbl_det.setObjectName("hint")
+        lay.addWidget(self.lbl_det)
+        lay.addStretch(1)
+        self.reload()
+
+    def reload(self):
+        self._updating = True
+        song, a = self.ctl.song, self.ctl.analysis
+        self.spin_bpm.setValue(song.bpm)
+        self.spin_off.setValue(song.beat_offset)
+        self.btn_auto.setEnabled(a is not None)
+        self.lbl_det.setText(f"detected {a.bpm:.2f} BPM, first beat {a.detected_offset:.3f} s" if a else
+                             "load audio to detect the tempo")
+        self._updating = False
+
+    def _apply(self, key, bpm=None, offset=None):
+        self.ctl.song.set_timing(bpm=bpm, beat_offset=offset)
+        self.ctl.commit("look", key)
+        self.ctl.changed.emit("arrangement")
+        self.changed.emit()
+
+    def _on_bpm(self, v):
+        if not self._updating and abs(v - self.ctl.song.bpm) > 1e-9:
+            self._apply("bpm", bpm=v)
+
+    def _on_offset(self, v):
+        if not self._updating and abs(v - self.ctl.song.beat_offset) > 1e-9:
+            self._apply("offset", offset=v)
+
+    def _nudge(self, d):
+        # moving the audio right = bar 1 earlier in the audio
+        self._apply("offset", offset=round(self.ctl.song.beat_offset - d, 6))
+        self.reload()
+
+    def _auto(self):
+        a = self.ctl.analysis
+        if a:
+            self._apply("auto", bpm=a.bpm, offset=a.detected_offset)
+            self.reload()
+
+    def _tap(self):
+        import time
+        now = time.monotonic()
+        if self._taps and now - self._taps[-1] > 2.0:
+            self._taps = []
+        self._taps = (self._taps + [now])[-12:]
+        if len(self._taps) >= 4:
+            iv = np.diff(self._taps)
+            self.spin_bpm.setValue(round(60.0 / float(np.median(iv)), 2))
 
 
 class MasterTab(QWidget):
@@ -588,6 +757,8 @@ class MasterTab(QWidget):
         self.lbl_region.setObjectName("hint")
         ll.addWidget(self.lbl_region)
         ll.addStretch(1)
+        ll.addWidget(hint("Drag the waveform to line the audio up with the grid (free, no snapping); tempo and "
+                          "bar 1 are in the bar at the bottom."))
         ll.addWidget(hint("Double-click a track: place pattern · drag clip: move (Ctrl copies) · drag right edge: "
                           "stretch (pattern loops) · double-click clip: edit its pattern · right-click: menu · "
                           "Ctrl+C / V (at playhead) / D · Shift-drag ruler: loop region · Shift-drag tracks: select · "
@@ -597,11 +768,20 @@ class MasterTab(QWidget):
         self.view.seekRequested.connect(seek)
         self.view.editPattern.connect(self.editPatternRequested.emit)
         self.view.regionChanged.connect(self._update_region_label)
+        self.view.audioMoved.connect(self._load_tempo)
+        self.tempo_bar = TempoBar(ctl)
+        self.tempo_bar.changed.connect(self.view.update)
 
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(2)
+        rl.addWidget(self.view, 1)
+        rl.addWidget(self.tempo_bar)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.addWidget(left)
-        lay.addWidget(self.view, 1)
+        lay.addWidget(right, 1)
         ctl.changed.connect(self._on_changed)
         ctl.currentPatternChanged.connect(self._select_combo)
         self._reload_patterns()
@@ -661,7 +841,12 @@ class MasterTab(QWidget):
         self.lbl_region.setText(f"{s:.2f}s → {e:.2f}s  ({e - s:.1f}s ≈ {bars:.1f} bars)")
         self.view.update()
 
+    def _load_tempo(self):
+        self.tempo_bar.reload()
+
     def _on_changed(self, kind):
+        if kind in ("all", "audio", "look", "arrangement"):
+            self.tempo_bar.reload()
         if kind in ("all", "patterns"):
             self._reload_patterns()
         if kind in ("all", "audio"):

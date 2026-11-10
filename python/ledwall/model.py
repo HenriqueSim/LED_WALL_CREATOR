@@ -315,6 +315,21 @@ class Song:
     def member_index(self) -> dict:
         return {m.id: i for i, m in enumerate(self.members)}
 
+    def set_timing(self, bpm: float | None = None, beat_offset: float | None = None):
+        """Change the tempo and / or where bar 1 sits in the audio. The loop region stays on the same
+        bars (it is stored in seconds of audio, so it is converted through beats)."""
+        old_p, old_o = 60.0 / max(self.bpm, 1.0), self.beat_offset
+        region_b = None
+        if self.region:
+            region_b = tuple((t - old_o) / old_p for t in self.region)
+        if bpm is not None:
+            self.bpm = float(bpm)
+        if beat_offset is not None:
+            self.beat_offset = float(beat_offset)
+        if region_b is not None:
+            p = 60.0 / max(self.bpm, 1.0)
+            self.region = tuple(self.beat_offset + b * p for b in region_b)
+
     def song_end_beats(self) -> float:
         ends = [c.start + c.length for c in self.clips] + [l.start + l.length for l in self.lyrics]
         return max(ends) if ends else 0.0

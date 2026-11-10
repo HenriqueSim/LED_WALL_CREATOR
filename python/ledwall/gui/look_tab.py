@@ -64,11 +64,12 @@ class LookTab(QWidget):
             bpm_row.addWidget(b)
         fs.addRow("BPM", bpm_row)
         self.spin_offset = QDoubleSpinBox()
-        self.spin_offset.setRange(0, 30)
+        self.spin_offset.setRange(-60, 600)
         self.spin_offset.setDecimals(3)
         self.spin_offset.setSingleStep(0.01)
         self.spin_offset.setSuffix(" s")
-        self.spin_offset.setToolTip("Where bar 1 starts in the audio")
+        self.spin_offset.setToolTip("Where bar 1 starts in the audio (also on the Master Track: drag the "
+                                    "waveform or use the bar at the bottom)")
         self.spin_offset.valueChanged.connect(self._on_offset)
         fs.addRow("Bar 1 starts at", self.spin_offset)
         self.btn_main = ColorButton(lk.main_rgb)
@@ -165,13 +166,13 @@ class LookTab(QWidget):
 
     def _on_bpm(self, v):
         if not self._updating and abs(v - self.ctl.song.bpm) > 1e-6:
-            self.ctl.song.bpm = v
+            self.ctl.song.set_timing(bpm=v)
             self.ctl.commit("look", "bpm")
             self.ctl.changed.emit("arrangement")
 
     def _on_offset(self, v):
-        if not self._updating:
-            self.ctl.song.beat_offset = v
+        if not self._updating and abs(v - self.ctl.song.beat_offset) > 1e-9:
+            self.ctl.song.set_timing(beat_offset=v)
             self.ctl.commit("look", "offset")
             self.ctl.changed.emit("arrangement")
 

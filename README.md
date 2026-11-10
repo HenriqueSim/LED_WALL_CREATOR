@@ -75,7 +75,12 @@ tabs below. A typical song goes through them in this order:
    | Fold a folder | click its row |
    | Move the playhead | click or drag the ruler (bar numbers) |
 
-5. **Master Track: arrange the song.** Place patterns as clips on three tracks over the
+5. **Master Track: arrange the song.** First line the audio up with the grid. **Drag the
+   waveform** left or right (it moves freely, not bar by bar) until the song's first downbeat sits
+   on bar 1. The bar at the bottom of the tab shows the **BPM** (type it, use ½ / ×2, or **Tap**
+   along) and where **bar 1** falls in the audio (with ◀ ▶ nudges of 5 ms and 50 ms).
+   *Auto-detect* goes back to what the analysis found. Clips stay on their bars when you change
+   the tempo or move the audio. Then place patterns as clips on three tracks over the
    waveform: double-click a track (or *Place pattern at playhead*). Drag a clip to move it
    (Ctrl-drag copies). Drag its right edge to stretch it: the pattern repeats. **Double-click a
    clip to open its pattern in the Pattern Editor at the spot you clicked.** Right-click for

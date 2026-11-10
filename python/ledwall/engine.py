@@ -108,7 +108,9 @@ class MotionEngine:
         """(attack s, release s, peak decay s) per lane type."""
         lk = self.song.look
         if lane == "fx:logo":
-            return lk.logo_attack_ms / 1000, lk.logo_release_ms / 1000, lk.logo_peak_decay_ms / 1000
+            return lk.logo_attack_ms / 1000, lk.logo_release_ms / 1000, 0.0
+        if lane == "fx:logo_glow":
+            return lk.logo_glow_attack_ms / 1000, lk.logo_glow_release_ms / 1000, lk.logo_peak_decay_ms / 1000
         if lane == "fx:flash":
             return 0.0, 0.25, 0.35
         if lane.endswith(("pulse", "chase", "random", "sparkle", "strobe", "blackout")):
@@ -306,8 +308,12 @@ class MotionEngine:
                 all_fl = np.maximum(all_fl, flash)
         levels, flash = all_lv, all_fl
 
-        logo_lv, logo_peak = lane("fx:logo", 0), lane("fx:logo", 2) * lk.logo_peak
-        logo_level = max(lk.logo_idle, logo_lv, 1.0 if self.preview_pulse else 0.0)
+        if lk.logo_always or self.preview_pulse:
+            logo_level = 1.0
+        else:
+            logo_level = max(lk.logo_idle, lane("fx:logo", 0))
+        # Band Name Light: a glow held while the note lasts plus a flash at each note start
+        logo_peak = lane("fx:logo_glow", 0) * lk.logo_glow + lane("fx:logo_glow", 2) * lk.logo_peak
 
         lyric, lyric_alpha = "", 0.0
         for ly in song.lyrics:

@@ -48,8 +48,13 @@ tabs below. A typical song goes through them in this order:
    (eight fonts ship with the app so they look the same on every computer, and any installed font
    works too), the layout (one line, two centred lines, or stacked with the second line shifted
    right), letter case, colour (*Dark cut-out* turns it into a silhouette cut into whatever is
-   behind it), size and position (or drag it and use the wheel in the preview), and its own fade-in,
-   fade-out and glow peak.
+   behind it), size and position (or drag it and use the wheel in the preview).
+
+   *When it shows*: tick **Always on for the whole song** to keep the name lit from start to end
+   with no fades. Otherwise it shows wherever the Global → *Band Name* lane has notes, with its own
+   fade-in and fade-out. To make it glow, put notes on the Global → **Band Name Light** lane: the
+   name glows while the note lasts and flashes when it starts (a short note = a quick flash, a long
+   one = a held glow). Its glow strength, fades, flash and radius are set in *Band Name Light*.
 
    Every element is made of **parts** (a hexagon's sides, the bars, a beam's segments), shared
    out between the members in order. With 6 members and a 6-segment beam, each member has one
@@ -63,7 +68,8 @@ tabs below. A typical song goes through them in this order:
 
    An element is only on the wall while one of its lanes plays, so notes are how you bring
    elements **in and out of the scene**. The **Global** folder holds Sparkle, Flash Peak (an
-   accent-coloured burst on whatever is in the scene), Blackout and Band Name.
+   accent-coloured burst on whatever is in the scene), Blackout, Band Name (shows the name) and
+   Band Name Light (makes it glow).
 
    Note length = how long it's lit, note velocity = how bright (the *Velocity* box sets new notes
    and edits the selected ones). While you edit, playback **loops the section** of the master

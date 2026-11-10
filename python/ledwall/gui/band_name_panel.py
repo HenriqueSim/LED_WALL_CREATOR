@@ -1,6 +1,6 @@
 """Band name settings (shown in the Elements tab when "Band name" is selected): the text, the font,
-the layout and its own fade / glow timing. The name is shown wherever the global "Band Name" lane
-has notes."""
+the layout, when it shows (always on, or wherever the global "Band Name" lane has notes) and its
+glow (the global "Band Name Light" lane)."""
 
 from __future__ import annotations
 
@@ -60,26 +60,43 @@ class BandNamePanel(QWidget):
         self._slider(fp, "Vertical position", "logo_y", 0.1, 0.95, 0.005, "{:.3f}")
         self._slider(fp, "2nd line shift", "logo_offset", -0.6, 1.0, 0.01)
 
-        g_light = QGroupBox("Light && timing")
+        g_show = QGroupBox("When it shows")
+        fs = QFormLayout(g_show)
+        self.chk_always = QCheckBox("Always on for the whole song")
+        self.chk_always.toggled.connect(lambda v: self._set("logo_always", v))
+        fs.addRow(self.chk_always)
+        self._slider(fs, "Fade in", "logo_attack_ms", 0, 4000, 10, "{:.0f}ms")
+        self._slider(fs, "Fade out", "logo_release_ms", 0, 8000, 20, "{:.0f}ms")
+        self._slider(fs, "Between notes", "logo_idle", 0, 1, 0.01)
+        self.hint_show = hint("")
+        fs.addRow(self.hint_show)
+
+        g_light = QGroupBox("Band Name Light (glow)")
         fl = QFormLayout(g_light)
-        self._slider(fl, "Fade in", "logo_attack_ms", 0, 4000, 10, "{:.0f}ms")
-        self._slider(fl, "Fade out", "logo_release_ms", 0, 8000, 20, "{:.0f}ms")
-        self._slider(fl, "Peak glow", "logo_peak", 0, 3, 0.05)
-        self._slider(fl, "Peak decay", "logo_peak_decay_ms", 50, 4000, 10, "{:.0f}ms")
+        self._slider(fl, "Glow", "logo_glow", 0, 3, 0.05)
+        self._slider(fl, "Glow fade in", "logo_glow_attack_ms", 0, 4000, 10, "{:.0f}ms")
+        self._slider(fl, "Glow fade out", "logo_glow_release_ms", 0, 8000, 20, "{:.0f}ms")
+        self._slider(fl, "Flash at note start", "logo_peak", 0, 3, 0.05)
+        self._slider(fl, "Flash decay", "logo_peak_decay_ms", 50, 4000, 10, "{:.0f}ms")
         self._slider(fl, "Glow radius", "logo_glow_radius", 4, 120, 1, "{:.0f}px")
-        self._slider(fl, "Always visible", "logo_idle", 0, 1, 0.01)
-        fl.addRow(hint("The name shows wherever the Global → Band Name lane has notes (note velocity = "
-                       "brightness). Each note start fires a glow peak that fades with its own timing."))
+        fl.addRow(hint("Put notes on the Global → Band Name Light lane to make the name glow: it glows "
+                       "while the note lasts (velocity = strength) and flashes when it starts. A short "
+                       "note gives a quick flash, a long one a held glow. It also lights the name up "
+                       "when it is not showing."))
 
         cols = QHBoxLayout()
         cols.addWidget(g_text, 1)
         cols.addWidget(g_place, 1)
-        cols.addWidget(g_light, 1)
+        cols2 = QHBoxLayout()
+        cols2.addWidget(g_show, 1)
+        cols2.addWidget(g_light, 2)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addLayout(cols)
+        lay.addLayout(cols2)
         lay.addStretch(1)
         self._form_place = fp
+        self._form_show = fs
         self.reload()
 
     # ---- helpers --------------------------------------------------------------------------
@@ -102,7 +119,7 @@ class BandNamePanel(QWidget):
             return
         setattr(self.ctl.song.look, attr, value)
         self.ctl.commit("look", key or attr)
-        if attr == "logo_layout":
+        if attr in ("logo_layout", "logo_always"):
             self._update_visibility()
 
     def _on_quick_font(self, i):
@@ -115,6 +132,14 @@ class BandNamePanel(QWidget):
         stacked = self.ctl.song.look.logo_layout == "stacked"
         self.chk_dot.setVisible(stacked)
         self._form_place.setRowVisible(self._sliders["logo_offset"], stacked)
+        always = self.ctl.song.look.logo_always
+        for attr in ("logo_attack_ms", "logo_release_ms", "logo_idle"):
+            self._form_show.setRowVisible(self._sliders[attr], not always)
+        self.hint_show.setText(
+            "The name is on at full strength from start to end, with no fades. The Band Name lane "
+            "isn't needed." if always else
+            "The name shows wherever the Global → Band Name lane has notes (velocity = brightness), "
+            "fading in and out. \"Between notes\" keeps it dimly visible the rest of the time.")
 
     def reload(self):
         self._updating = True
@@ -126,6 +151,7 @@ class BandNamePanel(QWidget):
                          (self.combo_color, "logo_color")):
             cb.setCurrentIndex(max(0, cb.findData(getattr(lk, attr))))
         self.chk_dot.setChecked(lk.logo_dot)
+        self.chk_always.setChecked(lk.logo_always)
         for attr, s in self._sliders.items():
             s.set_value(getattr(lk, attr))
         self._updating = False

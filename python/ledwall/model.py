@@ -29,7 +29,8 @@ GLOBAL_FX = [
     ("sparkle",  "Sparkle",     "Small glints across the wall"),
     ("flash",    "Flash Peak",  "Bloom burst in the accent colour on whatever is in the scene"),
     ("blackout", "Blackout",    "Kills the elements (band name + lyrics stay)"),
-    ("logo",     "Band Name",   "Shows the band name layer"),
+    ("logo",     "Band Name",   "Shows the band name (not needed when it is set to always on)"),
+    ("logo_glow", "Band Name Light", "Lights up / flashes the band name: a glow while the note lasts"),
 ]
 FX_LANES = GLOBAL_FX
 _OLD_ELEMENT_LANES = ("fx:all", "fx:pulse", "fx:chase", "fx:random", "fx:strobe")
@@ -261,7 +262,11 @@ class Look:
     logo_peak: float = 1.0
     logo_peak_decay_ms: float = 700.0
     logo_glow_radius: float = 38.0
-    logo_idle: float = 0.0
+    logo_idle: float = 0.0                  # how visible the name stays between Band Name notes
+    logo_always: bool = False               # shown at full strength for the whole song (no fades)
+    logo_glow: float = 1.0                  # Band Name Light: glow while a note is held
+    logo_glow_attack_ms: float = 120.0
+    logo_glow_release_ms: float = 700.0
     lyrics_size: float = 0.11
     lyrics_font: str = ""                   # "" = same as the band name
 
@@ -301,7 +306,7 @@ class Song:
         out = []
         for el in self.pattern_elements(pat):
             out += self.element_sublanes(el)
-        out += [(f"fx:{k}", label, "logo" if k == "logo" else "global") for k, label, _ in GLOBAL_FX]
+        out += [(f"fx:{k}", label, "logo" if k.startswith("logo") else "global") for k, label, _ in GLOBAL_FX]
         return out
 
     def lane_rows(self, pat=None, collapsed=frozenset()) -> list:
@@ -314,7 +319,7 @@ class Song:
                 rows += self.element_sublanes(el)
         rows.append(("fold:global", "Global", "folder"))
         if "global" not in collapsed:
-            rows += [(f"fx:{k}", label, "logo" if k == "logo" else "global") for k, label, _ in GLOBAL_FX]
+            rows += [(f"fx:{k}", label, "logo" if k.startswith("logo") else "global") for k, label, _ in GLOBAL_FX]
         return rows
 
     def pattern(self, pid: str) -> Pattern | None:
@@ -371,12 +376,12 @@ class Song:
     # ---- (de)serialisation ---------------------------------------------------
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["version"] = 4
+        d["version"] = 5
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "Song":
-        if d.get("version") not in (2, 3, 4):
+        if d.get("version") not in (2, 3, 4, 5):
             raise ValueError("This project was made with an older version of the app (no patterns).")
 
         def tup(v):
@@ -420,6 +425,11 @@ class Song:
                     else:
                         new.append(n)
                 p.notes = new
+        if d.get("version", 0) < 5 and look.logo_peak > 0:
+            # the glow peak used to fire at the start of every Band Name note; it now has its own
+            # Band Name Light lane, so give the old notes a short light note at the same spot
+            for p in patterns:
+                p.notes += [Note("fx:logo_glow", n.start, 1, n.velocity) for n in p.notes if n.lane == "fx:logo"]
         return Song(
             members=[Member(**m) for m in d.get("members", [])],
             groups=[Group(**g) for g in d.get("groups", [])],
@@ -452,7 +462,8 @@ def default_song() -> Song:
                      [Note(B(f"g:{groups[i % 2].id}"), i * 4, 2, 0.9) for i in range(4)])
     chorus = Pattern(new_id(), "Chorus", 2, PATTERN_COLORS[2],
                      [Note(S("all"), 0, 32, 1.0), Note(S("pulse"), 0, 32, 0.8), Note(B("all"), 0, 32, 0.8),
-                      Note("fx:logo", 0, 32, 1.0), Note("fx:flash", 0, 1, 0.6)])
+                      Note("fx:logo", 0, 32, 1.0), Note("fx:logo_glow", 0, 1, 1.0),
+                      Note("fx:flash", 0, 1, 0.6)])
     build = Pattern(new_id(), "Build", 1, PATTERN_COLORS[3],
                     [Note(S("all"), 0, 16, 0.5), Note(B("chase"), 0, 12, 0.9), Note(B("strobe"), 12, 4, 0.8)])
 

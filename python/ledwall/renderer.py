@@ -718,6 +718,10 @@ class FrameRenderer:
             roi = img[y0:y1, x0:x1].astype(np.float32)
             k = min(1.0, L + 0.3 * P)
             roi *= 1.0 - np.clip(fill * 0.94 + tight * 0.25, 0, 1) * k
+            if P > 0.003:   # Band Name Light: a rim of accent light around the dark letters
+                rim = np.clip(tight * 0.6 + wide * 0.8 - fill, 0, 1) * P
+                roi += rim * np.array(_bgr(lk.accent_rgb), np.float32)
+                np.clip(roi, 0, 255, out=roi)
             img[y0:y1, x0:x1] = roi.astype(np.uint8)
             return
         col = {"main": lk.main_rgb, "white": (255, 255, 255)}.get(lk.logo_color, lk.accent_rgb)

@@ -28,8 +28,9 @@ class BandTab(QWidget):
             b.clicked.connect(fn)
             row.addWidget(b)
         ml.addLayout(row)
-        ml.addWidget(hint("Double-click a name to rename. Each member is one cluster of slats in the design, in this order. "
-                          "Every member gets a row in the pattern editor."))
+        ml.addWidget(hint("Double-click a name to rename. Each element's parts (bars, sides, segments...) are shared out "
+                          "between the members in this order. Every member gets a row inside each element's folder "
+                          "in the pattern editor."))
 
         g_grp = QGroupBox("Groups")
         gl = QHBoxLayout(g_grp)

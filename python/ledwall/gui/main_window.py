@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
         self.ctl.changed.connect(self._on_changed)
+        self.ctl.currentPatternChanged.connect(lambda *_: self._update_audition())
         self._update_title()
 
         self.timer = QTimer(self)
@@ -109,14 +110,18 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.look_tab, "Look && Song")
         self.tabs.addTab(self.export_tab, "Export")
         self.tabs.currentChanged.connect(lambda *_: self._update_audition())
-        self.elements_tab.previewLitChanged.connect(lambda *_: self._update_audition())
+        self.elements_tab.previewModeChanged.connect(lambda *_: self._update_audition())
         self.canvas.pressed.connect(self._canvas_press)
         self.canvas.dragged.connect(self._canvas_drag)
         self.canvas.released.connect(lambda: setattr(self, "_el_drag", None))
         self.canvas.wheeled.connect(self._canvas_wheel)
         self._el_drag = None
 
-        self.pattern_tab.auditionChanged.connect(lambda *_: self._update_audition())
+        self.pattern_tab.loopSectionChanged.connect(lambda *_: self._update_audition())
+        self._section_clip_id = None   # master-track clip opened in the pattern editor
+        self.section = None            # (t0, t1) looped while the pattern editor is open
+        self.free_clock = QElapsedTimer()
+        self.free_clock.start()
         self.master_tab.editPatternRequested.connect(self._edit_pattern)
         self.look_tab.loadAudioRequested.connect(self.load_audio_dialog)
         self.export_tab.renderRequested.connect(self.render_video)
@@ -172,23 +177,56 @@ class MainWindow(QMainWindow):
         name = os.path.basename(self.ctl.project_path) if self.ctl.project_path else "untitled"
         self.setWindowTitle(f"{APP_NAME} — {name}{' *' if self.ctl.dirty else ''}")
 
+    def _pattern_section(self):
+        """The master-track clip of the current pattern to loop: the one opened from the master track,
+        else the one under the playhead, else its first one. None if the pattern is not placed."""
+        pat = self.ctl.current_pattern
+        if not pat:
+            return None
+        clips = sorted((c for c in self.ctl.song.clips if c.pattern_id == pat.id), key=lambda c: c.start)
+        if not clips:
+            return None
+        eng = self.ctl.engine
+        b = eng.t2b(self.current_t)
+        clip = (next((c for c in clips if c.id == self._section_clip_id), None)
+                or next((c for c in clips if c.start <= b < c.start + c.length), None) or clips[0])
+        self._section_clip_id = clip.id
+        return clip
+
     def _update_audition(self):
-        in_elements = self.tabs.currentWidget() is self.elements_tab
-        self.ctl.engine.force_lit = in_elements and self.elements_tab.chk_lit.isChecked()
+        eng = self.ctl.engine
+        cur = self.tabs.currentWidget()
+        in_elements = cur is self.elements_tab
+        eng.preview_pulse = in_elements and self.elements_tab.chk_pulse.isChecked()
         self.canvas.interactive = in_elements
         if not in_elements:
             self.canvas.selection = None
-        on = self.pattern_tab.chk_audition.isChecked() and self.tabs.currentWidget() is self.pattern_tab
-        pid = self.ctl.current_pattern_id if on else None
-        self.ctl.engine.audition_pattern = pid
         pat = self.ctl.current_pattern
-        if in_elements and self.ctl.engine.force_lit:
-            self.lbl_mode.setText("Elements: preview fully lit")
+        self.section, eng.audition_pattern = None, None
+        if cur is self.pattern_tab and self.pattern_tab.chk_loop.isChecked() and pat:
+            clip = self._pattern_section()
+            if clip:
+                self.section = (eng.b2t(clip.start), eng.b2t(clip.start + clip.length))
+            else:
+                eng.audition_pattern = pat.id
+        if eng.preview_pulse:
+            self.lbl_mode.setText("Elements: pulse preview")
+        elif self.section:
+            bar0 = int(eng.t2b(self.section[0]) // 4) + 1
+            bar1 = int(round(eng.t2b(self.section[1]) / 4))
+            self.lbl_mode.setText(f"Looping {pat.name}: bars {bar0}–{bar1}")
+        elif eng.audition_pattern:
+            self.lbl_mode.setText(f"Looping pattern {pat.name} (not on the master track)")
         else:
-            self.lbl_mode.setText(f"Auditioning pattern: {pat.name}" if pid and pat else "Playing: Master Track")
+            self.lbl_mode.setText("Playing: Master Track")
         self._dirty = True
 
     def _edit_pattern(self, pid, step=0.0, t=None):
+        self._section_clip_id = None
+        if t is not None:
+            b = self.ctl.engine.t2b(t)
+            c = next((c for c in self.ctl.song.clips if c.pattern_id == pid and c.start <= b < c.start + c.length), None)
+            self._section_clip_id = c.id if c else None
         self.ctl.set_current_pattern(pid)
         self.tabs.setCurrentWidget(self.pattern_tab)
         if t is not None:
@@ -276,6 +314,8 @@ class MainWindow(QMainWindow):
     def play(self):
         if self.current_t >= self.ctl.engine.duration - 0.05:
             self.current_t = 0.0
+        if self.section and not (self.section[0] <= self.current_t < self.section[1]):
+            self.current_t = self.section[0]
         self.playing = True
         self.clock_anchor = self.current_t
         self.elapsed.restart()
@@ -317,7 +357,10 @@ class MainWindow(QMainWindow):
                     self.clock_anchor, t = pt, pt
                     self.elapsed.restart()
             r = self.ctl.song.region
-            if self.ctl.song.loop and r and t >= r[1] and not eng.audition_pattern:
+            if self.section and t >= self.section[1]:
+                self.seek(self.section[0])
+                t = self.section[0]
+            elif self.ctl.song.loop and r and t >= r[1] and not eng.audition_pattern:
                 self.seek(r[0])
                 t = r[0]
             elif t >= eng.duration:
@@ -325,6 +368,8 @@ class MainWindow(QMainWindow):
                 t = eng.duration
             self.current_t = t
             self._dirty = True
+        elif eng.preview_pulse:
+            self._dirty = True          # the pulse preview keeps running while paused
         if self._dirty:
             self._render_preview()
             self._dirty = False
@@ -335,7 +380,8 @@ class MainWindow(QMainWindow):
         if self.renderer is None or (self.renderer.w, self.renderer.h) != (pw, ph):
             self.renderer = FrameRenderer(pw, ph)
         eng, t = self.ctl.engine, self.current_t
-        self.canvas.show_frame(self.renderer.render(eng.state_at(t), self.ctl.song))
+        t_frame = self.free_clock.elapsed() / 1000.0 if (eng.preview_pulse and not self.playing) else t
+        self.canvas.show_frame(self.renderer.render(eng.state_at(t_frame), self.ctl.song))
         if self.canvas.interactive:
             self.canvas.selection = self.renderer.bboxes.get(self.elements_tab.selected_id or "")
         b = eng.t2b(t)

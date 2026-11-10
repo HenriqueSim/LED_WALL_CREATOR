@@ -175,6 +175,9 @@ def hint(text: str) -> QLabel:
 
 
 LANE_COLORS = {
+    "folder": (150, 150, 150),
+    "all": (255, 205, 120),
+    "global": (120, 170, 255),
     "member": (255, 168, 60),
     "group": (70, 210, 200),
     "fx": (180, 130, 255),

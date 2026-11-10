@@ -86,32 +86,33 @@ class FrameRenderer:
     def element_rgb(el, lk) -> tuple:
         return {"accent": lk.accent_rgb, "custom": el.custom_rgb}.get(el.color, lk.main_rgb)
 
-    def _drive(self, el, st: FrameState, song: Song):
-        """Per-part (one per member) brightness and flash for an element."""
-        n = max(1, len(st.levels))
-        lv = st.levels if len(st.levels) else np.zeros(1, np.float32)
-        fl = st.flash if len(st.flash) else np.zeros(1, np.float32)
-        d = el.driver
-        if d == "members":
-            levels, flash = lv, fl
-        else:
-            if d.startswith("m:"):
-                idx = song.member_index().get(d[2:])
-                v, f = (float(lv[idx]), float(fl[idx])) if idx is not None and idx < len(lv) else (0.0, 0.0)
-            elif d.startswith("g:"):
-                g = next((g for g in song.groups if g.id == d[2:]), None)
-                mi = song.member_index()
-                idx = [mi[m] for m in (g.members if g else []) if m in mi and mi[m] < len(lv)]
-                v = float(max((lv[i] for i in idx), default=0.0))
-                f = float(max((fl[i] for i in idx), default=0.0))
-            elif d == "always":
-                v, f = 1.0, float(fl.max())
-            elif d == "audio":
-                v, f = st.env, float(fl.max())
-            else:
-                v, f = 0.0, 0.0
-            levels, flash = np.full(n, v, np.float32), np.full(n, f, np.float32)
-        b = el.idle + (1.0 - el.idle) * np.minimum(levels, 1.2)
+    @staticmethod
+    def parts(arr: np.ndarray, n: int) -> np.ndarray:
+        """Share per-member values out over n parts, in order. More parts than members: each member
+        gets a run of parts. Fewer: each part takes the brightest of its members (1 part = everyone)."""
+        n = max(1, int(n))
+        m = len(arr)
+        if m == 0:
+            return np.zeros(n, np.float32)
+        if n >= m:
+            return arr[(np.arange(n) * m) // n].astype(np.float32)
+        starts = -((-np.arange(n) * m) // n)          # ceil(i * m / n)
+        return np.maximum.reduceat(arr, starts).astype(np.float32)
+
+    def part_members(self, n: int, m: int) -> np.ndarray:
+        """Which member each of n parts belongs to (for spacing / audio bands)."""
+        n = max(1, int(n))
+        return (np.arange(n) * max(m, 1)) // n if n >= m else np.arange(n) * max(m, 1) // n
+
+    def _drive(self, el, st: FrameState, song: Song, n: int):
+        """(levels, brightness, flash) for the n parts of an element. Brightness = idle glow while the
+        element is in the scene + its lit level."""
+        lv, fl, presence = st.elements.get(el.id, (None, None, 0.0))
+        if lv is None:
+            lv = np.zeros(len(song.members), np.float32)
+            fl = lv
+        levels, flash = self.parts(lv, n), self.parts(fl, n)
+        b = el.idle * presence + (1.0 - el.idle) * np.minimum(levels, 1.2)
         return levels, b, flash
 
     def _part_colors(self, el, lk, flash) -> list:
@@ -235,11 +236,14 @@ class FrameRenderer:
 
     def _draw_sun(self, layer, el, st, song):
         lk = song.look
-        levels, _, flash = self._drive(el, st, song)
-        lv = np.minimum(levels, 1.2)
-        v = 0.6 * float(lv.max()) + 0.4 * float(lv.mean())               # one gentle level for the whole sun
-        f = 0.6 * float(flash.max()) if len(flash) else 0.0
-        bright = el.idle + (1.0 - el.idle) * min(1.0, v)
+        levels, b, flash = self._drive(el, st, song, 1)
+        v = min(1.0, float(levels[0]))
+        f = 0.6 * float(flash[0])
+        bright = float(b[0])
+        if bright <= 0.002:
+            self.bboxes[el.id] = (el.x * self.w - el.size * self.h, el.y * self.h - el.size * self.h,
+                                  el.x * self.w + el.size * self.h, el.y * self.h)
+            return None
         cx, cy = el.x * self.w, el.y * self.h
         R = el.size * self.h * (1.0 + el.react_scale * min(1.0, v))
         self.bboxes[el.id] = (cx - R, cy - R, cx + R, cy)
@@ -273,12 +277,11 @@ class FrameRenderer:
     # ---- element: polygon (hexagon) ------------------------------------------------------
     def _draw_polygon(self, layer, el, st, song):
         lk = song.look
-        levels, b, flash = self._drive(el, st, song)
+        sides = max(3, int(el.sides))
+        levels, b, flash = self._drive(el, st, song, sides)
         cols = self._part_colors(el, lk, flash)
-        n = len(b)
         cx, cy = el.x * self.w, el.y * self.h
         R = el.size * self.h * (1.0 + el.react_scale * float(np.mean(np.minimum(levels, 1.2))))
-        sides = max(3, int(el.sides))
         ang = np.radians(el.rotation + el.spin * st.beat - 90.0 + np.arange(sides) * 360.0 / sides)
         verts = np.stack([cx + R * np.cos(ang), cy + R * np.sin(ang)], 1)
         mean_b, mean_col = float(np.mean(b)), np.mean(cols, axis=0)
@@ -287,11 +290,10 @@ class FrameRenderer:
             cv2.fillPoly(self.mask, [_fx(verts)], int(255 * min(1.0, mean_b * (0.85 if el.fill == "gradient" else 0.5))), AA, SHIFT)
             self._apply_mask(layer, self.mask, mean_col, cy - R, cy + R + 1, el.fill == "gradient")
         t = self.th(el.thickness)
-        for i in range(sides):          # one edge per member (wraps if sides != members)
-            k = i % n
-            cv2.line(layer, tuple(_fx(verts[i])), tuple(_fx(verts[(i + 1) % sides])), _bgr(cols[k], float(b[k])), t, AA, SHIFT)
+        for i in range(sides):          # one edge per part
+            cv2.line(layer, tuple(_fx(verts[i])), tuple(_fx(verts[(i + 1) % sides])), _bgr(cols[i], float(b[i])), t, AA, SHIFT)
         for i in range(sides):          # glowing joints
-            k1, k2 = (i - 1) % sides % n, i % n
+            k1, k2 = (i - 1) % sides, i
             bb = max(float(b[k1]), float(b[k2]))
             cv2.circle(layer, tuple(_fx(verts[i])), int(t * 0.9 * SCALE), _bgr(self._outline_rgb(cols[k2]), bb), -1, AA, SHIFT)
         self.bboxes[el.id] = (cx - R, cy - R, cx + R, cy + R)
@@ -299,9 +301,9 @@ class FrameRenderer:
     # ---- element: ring ---------------------------------------------------------------------------
     def _draw_ring(self, layer, el, st, song):
         lk = song.look
-        levels, b, flash = self._drive(el, st, song)
+        n = max(1, int(el.count))
+        levels, b, flash = self._drive(el, st, song, n)
         cols = self._part_colors(el, lk, flash)
-        n = len(b)
         cx, cy = el.x * self.w, el.y * self.h
         R = el.size * self.h * (1.0 + el.react_scale * float(np.mean(np.minimum(levels, 1.2))))
         if el.fill in ("filled", "gradient"):
@@ -319,27 +321,32 @@ class FrameRenderer:
         self.bboxes[el.id] = (cx - R, cy - R, cx + R, cy + R)
 
     # ---- element: vertical blocks ------------------------------------------------------------------
-    def _bars_layout(self, el, n: int):
+    def _bars_layout(self, el, n_mem: int):
+        n = max(1, int(el.count))
         x0 = (el.x - el.size / 2) * self.w
         width = el.size * self.w
-        key = (el.id, n, el.slats, round(x0), round(width), self.w, self.h)
+        key = (el.id, n, n_mem, round(el.gap, 3), round(x0), round(width), self.w, self.h)
         lay = self._layout_cache.get(key)
         if lay is None:
             if len(self._layout_cache) > 16:
                 self._layout_cache.clear()
             rng = np.random.default_rng(7)
-            slats = max(1, int(el.slats))
-            slot = width / max(n, 1)
-            member_gap = slot * 0.09
-            sw_ = (slot - member_gap) / (slats + (slats - 1) * 0.28)
+            owner = self.part_members(n, n_mem)
+            # extra space where the bars change member, so each member reads as a cluster
+            breaks = int(np.count_nonzero(np.diff(owner))) if n > n_mem > 1 else 0
+            gap = max(0.0, el.gap)
+            units = n + (n - 1) * gap + breaks * 0.9
+            bw = width / units
             lay = []
+            x = x0
             for i in range(n):
-                xm = x0 + i * slot + member_gap / 2
-                for j in range(slats):
-                    xl = xm + j * sw_ * 1.28
-                    ang = 0.0 if rng.random() < 0.3 else rng.uniform(-13, 13)
-                    lay.append(dict(member=i, x0=xl, x1=xl + sw_, slope=math.tan(math.radians(ang)) * sw_,
-                                    rest=rng.uniform(0.45, 0.62), hv=rng.uniform(0.8, 1.0), ph=rng.uniform(0, 6.28)))
+                if i and n > n_mem > 1 and owner[i] != owner[i - 1]:
+                    x += bw * 0.9
+                ang = 0.0 if (n == 1 or rng.random() < 0.3) else rng.uniform(-13, 13)
+                lay.append(dict(member=int(owner[i]), x0=x, x1=x + bw, slope=math.tan(math.radians(ang)) * bw,
+                                rest=rng.uniform(0.45, 0.62) if n > 1 else 0.55, hv=rng.uniform(0.8, 1.0) if n > 1 else 1.0,
+                                ph=rng.uniform(0, 6.28)))
+                x += bw * (1 + gap)
             self._layout_cache[key] = lay
         return lay
 
@@ -349,20 +356,20 @@ class FrameRenderer:
 
     def _draw_bars(self, layer, el, st, song):
         lk = song.look
-        levels, b, flash = self._drive(el, st, song)
-        n = len(b)
+        n_mem = len(song.members)
+        n = max(1, int(el.count))
+        levels, b, flash = self._drive(el, st, song, n)
         rgb = self.element_rgb(el, lk)
         top_max, bottom = self._bar_limits(el, lk)
         span = bottom - top_max
-        slats = self._bars_layout(el, n)
+        slats = self._bars_layout(el, n_mem)
         mask = self.mask
         mask.fill(0)
         polys = []
         any_flash = bool(flash.max() > 0.01)
         fmask = np.zeros_like(mask) if any_flash else None
-        bands = st.bands if len(st.bands) == n else np.zeros(n, np.float32)
-        for sl in slats:
-            k = sl["member"]
+        bands = self.parts(st.bands, n) if len(st.bands) else np.zeros(n, np.float32)
+        for k, sl in enumerate(slats):
             lv = float(levels[k])
             rest = bottom - span * (1.0 - sl["rest"])
             y = rest - (rest - top_max) * min(lv, 1.0) * sl["hv"]
@@ -382,7 +389,7 @@ class FrameRenderer:
             cv2.max(layer, acc, dst=layer)
         orgb = self._outline_rgb(rgb)
         t = self.th(el.thickness)
-        for poly, bb in polys:
+        for poly, bb in (polys if el.thickness > 0 else []):
             cv2.polylines(layer, [poly], True, _bgr(orgb, min(1.0, bb * 1.05)), t, AA, SHIFT)
         if st.sparkle > 0.01:
             self._sparkles(layer, st, lk, [(sl, top_max + span * 0.3) for sl in slats])
@@ -413,8 +420,8 @@ class FrameRenderer:
     # ---- element: light shafts ------------------------------------------------------------------
     def _draw_shafts(self, layer, el, st, song):
         lk = song.look
-        levels, b, flash = self._drive(el, st, song)
-        n = len(b)
+        n = max(1, int(el.count))
+        levels, b, flash = self._drive(el, st, song, n)
         rgb = self.element_rgb(el, lk)
         x0 = (el.x - el.size / 2) * self.w
         slot = el.size * self.w / n
@@ -440,9 +447,9 @@ class FrameRenderer:
     # ---- element: horizon ---------------------------------------------------------------------------
     def _draw_horizon(self, layer, el, st, song):
         lk = song.look
-        levels, b, flash = self._drive(el, st, song)
+        n = max(1, int(el.count))
+        levels, b, flash = self._drive(el, st, song, n)
         cols = self._part_colors(el, lk, flash)
-        n = len(b)
         rgb = self.element_rgb(el, lk)
         top_rgb, bottom_rgb = gradient_colors(rgb)
         yh = el.y * self.h
@@ -450,7 +457,7 @@ class FrameRenderer:
         width = el.size * self.w
         slot = width / n
         top_max = max(lk.headroom + 0.04, el.y - el.height) * self.h
-        cv2.line(layer, tuple(_fx((x0, yh))), tuple(_fx((x0 + width, yh))), _bgr(rgb, (el.idle + 0.5 * float(levels.mean())) * 0.7),
+        cv2.line(layer, tuple(_fx((x0, yh))), tuple(_fx((x0 + width, yh))), _bgr(rgb, (float(b.min()) + 0.5 * float(levels.mean())) * 0.7),
                  self.th(max(1.0, el.thickness * 0.4)), AA, SHIFT)
         soft = np.zeros((self.sh, self.sw, 3), np.float32)
         k = 1.0 / self.DS
@@ -470,23 +477,31 @@ class FrameRenderer:
     # ---- element: beam ------------------------------------------------------------------------------
     def _draw_beam(self, layer, el, st, song):
         lk = song.look
-        levels, b, flash = self._drive(el, st, song)
+        n = max(1, int(el.count))
+        levels, b, flash = self._drive(el, st, song, n)
         cols = self._part_colors(el, lk, flash)
-        n = len(b)
         cx, cy = el.x * self.w, el.y * self.h
         L = el.size * self.w * (1.0 + el.react_scale * float(np.mean(np.minimum(levels, 1.2))))
         a = math.radians(el.rotation + el.spin * st.beat)
         d = np.array([math.cos(a), math.sin(a)])
-        p0 = np.array([cx, cy]) - d * L / 2
+        nrm = np.array([-d[1], d[0]])
         seg = L / n
         gap = min(seg * 0.08, 0.01 * self.w) if n > 1 else 0.0
         t = self.th(el.thickness)
-        for k in range(n):
-            s0 = p0 + d * (k * seg + gap / 2)
-            s1 = p0 + d * ((k + 1) * seg - gap / 2)
-            cv2.line(layer, tuple(_fx(s0)), tuple(_fx(s1)), _bgr(cols[k], float(b[k])), t, AA, SHIFT)
-        ex = abs(d[0]) * L / 2 + t
-        ey = abs(d[1]) * L / 2 + t
+        lines = max(1, int(el.lines))
+        sp = el.spacing * self.h
+        for li in range(lines):
+            c = np.array([cx, cy]) + nrm * (li - (lines - 1) / 2) * sp
+            p0 = c - d * L / 2
+            for k in range(n):
+                if b[k] <= 0.002:
+                    continue
+                s0 = p0 + d * (k * seg + gap / 2)
+                s1 = p0 + d * ((k + 1) * seg - gap / 2)
+                cv2.line(layer, tuple(_fx(s0)), tuple(_fx(s1)), _bgr(cols[k], float(b[k])), t, AA, SHIFT)
+        half_w = (lines - 1) / 2 * sp
+        ex = abs(d[0]) * L / 2 + abs(nrm[0]) * half_w + t
+        ey = abs(d[1]) * L / 2 + abs(nrm[1]) * half_w + t
         self.bboxes[el.id] = (cx - ex, cy - ey, cx + ex, cy + ey)
 
     # ---- band name layer ----------------------------------------------------------------------

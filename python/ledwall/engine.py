@@ -3,7 +3,8 @@
 Pipeline per frame:
   1. find master-track clips under the playhead (or the auditioned pattern)
   2. evaluate every note of their patterns -> per-lane envelope level / gate / onset peak
-  3. resolve lanes onto members (member lanes, groups, All, Pulse, Chase, Random, Strobe ...)
+  3. per element: resolve its lanes onto members (All, members, groups, Pulse, Chase, Random,
+     Strobe) and work out how much it is in the scene; then the global lanes (flash, blackout ...)
   4. modulate with audio energy, add lyrics, optionally blend the end of a loop into its start
 """
 
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .audio import AudioAnalysis
-from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song
+from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, el_lane
 
 
 @dataclass
@@ -36,6 +37,7 @@ class FrameState:
     logo_peak: float = 0.0
     lyric: str = ""
     lyric_alpha: float = 0.0
+    elements: dict = field(default_factory=dict)   # element id -> (levels, flash, presence)
 
 
 _SCALARS = ("env", "beat_pulse", "bloom", "sparkle", "blackout", "logo_level", "logo_peak", "lyric_alpha")
@@ -47,6 +49,11 @@ def blend_states(a: FrameState, b: FrameState, w: float) -> FrameState:
         setattr(out, f, (1 - w) * getattr(a, f) + w * getattr(b, f))
     for f in ("levels", "flash", "bands"):
         setattr(out, f, (1 - w) * getattr(a, f) + w * getattr(b, f))
+    out.elements = {}
+    for k in set(a.elements) | set(b.elements):
+        la, fa, pa = a.elements.get(k, (0.0, 0.0, 0.0))
+        lb, fb, pb = b.elements.get(k, (0.0, 0.0, 0.0))
+        out.elements[k] = ((1 - w) * la + w * lb, (1 - w) * fa + w * fb, (1 - w) * pa + w * pb)
     if w > 0.5:
         out.lyric, out.step = b.lyric, b.step
     return out
@@ -70,7 +77,7 @@ class MotionEngine:
         self.song = song
         self.analysis = analysis
         self.audition_pattern: str | None = None   # pattern id looped instead of the master track
-        self.force_lit = False                      # Elements tab: preview every element fully lit
+        self.preview_pulse = False                  # Elements tab: every element in the scene, pulsing
 
     # ---- time helpers ---------------------------------------------------------
     @property
@@ -103,7 +110,7 @@ class MotionEngine:
             return lk.logo_attack_ms / 1000, lk.logo_release_ms / 1000, lk.logo_peak_decay_ms / 1000
         if lane == "fx:flash":
             return 0.0, 0.25, 0.35
-        if lane in ("fx:pulse", "fx:chase", "fx:random", "fx:sparkle", "fx:strobe", "fx:blackout"):
+        if lane.endswith(("pulse", "chase", "random", "sparkle", "strobe", "blackout")):
             return 0.0, 0.0, 0.3
         return lk.attack_ms / 1000, lk.release_ms / 1000, 0.3
 
@@ -225,56 +232,66 @@ class MotionEngine:
             v = lanes.get(key)
             return v[idx] if v else 0.0
 
-        levels = np.zeros(n_mem, np.float32)
-        flash = np.zeros(n_mem, np.float32)
         midx = song.member_index()
-        for m in song.members:
-            levels[midx[m.id]] = lane(f"m:{m.id}")
-        for g in song.groups:
-            gv = lane(f"g:{g.id}")
-            if gv > 0:
-                for mid in g.members:
-                    if mid in midx:
-                        levels[midx[mid]] = max(levels[midx[mid]], gv)
-        if n_mem:
-            levels = np.maximum(levels, lane("fx:all"))
-
-        bloom = 0.0
-        pulse = lane("fx:pulse", 1)
-        if pulse > 0 and n_mem:
-            levels = np.maximum(levels, pulse * (0.2 + 0.8 * beat_pulse))
-            bloom += 0.35 * pulse * beat_pulse
-        chase = lane("fx:chase", 1)
-        if chase > 0 and n_mem:
-            i = step % n_mem
-            levels[i] = max(levels[i], chase)
-            j = (step - 1) % n_mem
-            levels[j] = max(levels[j], chase * 0.35)
-        rnd = lane("fx:random", 1)
-        if rnd > 0:
-            for i in range(n_mem):
-                if _hash01(step, i) < 0.45:
-                    levels[i] = max(levels[i], rnd * (0.55 + 0.45 * _hash01(step, i + 101)))
-
-        # audio reactivity on whatever is lit
-        if n_mem and lk.audio_react > 0:
-            levels = levels * ((1.0 - lk.audio_react) + lk.audio_react * (0.25 + 0.75 * bands)) * (1 + 0.25 * lk.audio_react)
-
-        strobe = lane("fx:strobe", 1)
-        if strobe > 0 and n_mem:
-            on = ((b * max(1, lk.strobe_rate)) % 1.0) < 0.45
-            if on:
-                levels = np.maximum(levels, strobe)
-                flash = np.maximum(flash, strobe)
-                bloom += 0.5 * strobe
         fpk = lane("fx:flash", 2)
-        if fpk > 0.002 and n_mem:
-            levels = np.maximum(levels, fpk)
-            flash = np.maximum(flash, 0.85 * fpk)
-            bloom += 1.2 * fpk
-
-        if self.force_lit and n_mem:
-            levels = np.maximum(levels, 1.0)
+        bloom = 1.2 * fpk if fpk > 0.002 else 0.0
+        elements = {}
+        all_lv = np.zeros(n_mem, np.float32)
+        all_fl = np.zeros(n_mem, np.float32)
+        for el in song.active_elements():
+            def L(sub, idx=0, _e=el.id):
+                return lane(el_lane(_e, sub), idx)
+            levels = np.zeros(n_mem, np.float32)
+            flash = np.zeros(n_mem, np.float32)
+            if self.preview_pulse:
+                pulse, chase, rnd, strobe = 1.0, 0.0, 0.0, 0.0
+                presence = 1.0
+            else:
+                for m in song.members:
+                    levels[midx[m.id]] = L(f"m:{m.id}")
+                for g in song.groups:
+                    gv = L(f"g:{g.id}")
+                    if gv > 0:
+                        for mid in g.members:
+                            if mid in midx:
+                                levels[midx[mid]] = max(levels[midx[mid]], gv)
+                if n_mem:
+                    levels = np.maximum(levels, L("all"))
+                pulse, chase, rnd, strobe = L("pulse", 1), L("chase", 1), L("random", 1), L("strobe", 1)
+                presence = max(float(levels.max()) if n_mem else 0.0, pulse, chase, rnd, strobe)
+            if pulse > 0 and n_mem:
+                levels = np.maximum(levels, pulse * (0.2 + 0.8 * beat_pulse))
+                bloom += 0.35 * pulse * beat_pulse / max(1, len(song.elements))
+            if chase > 0 and n_mem:
+                i = step % n_mem
+                levels[i] = max(levels[i], chase)
+                j = (step - 1) % n_mem
+                levels[j] = max(levels[j], chase * 0.35)
+            if rnd > 0:
+                for i in range(n_mem):
+                    if _hash01(step, i) < 0.45:
+                        levels[i] = max(levels[i], rnd * (0.55 + 0.45 * _hash01(step, i + 101)))
+            # audio reactivity on whatever is lit
+            if n_mem and lk.audio_react > 0:
+                levels = levels * ((1.0 - lk.audio_react) + lk.audio_react * (0.25 + 0.75 * bands)) * (1 + 0.25 * lk.audio_react)
+            if strobe > 0 and n_mem:
+                on = ((b * max(1, lk.strobe_rate)) % 1.0) < 0.45
+                if on:
+                    levels = np.maximum(levels, strobe)
+                    flash = np.maximum(flash, strobe)
+                    bloom += 0.5 * strobe
+                elif max(float(levels.max()), pulse, chase, rnd) < 0.01:
+                    presence = 0.0          # strobe alone: dark between flashes
+            if fpk > 0.002 and n_mem and presence > 0.001:   # the flash hits what is in the scene
+                levels = np.maximum(levels, fpk)
+                flash = np.maximum(flash, 0.85 * fpk)
+            levels = np.clip(levels, 0, 1.5).astype(np.float32)
+            flash = np.clip(flash, 0, 1).astype(np.float32)
+            elements[el.id] = (levels, flash, min(1.0, presence))
+            if n_mem:
+                all_lv = np.maximum(all_lv, levels)
+                all_fl = np.maximum(all_fl, flash)
+        levels, flash = all_lv, all_fl
 
         logo_lv, logo_peak = lane("fx:logo", 0), lane("fx:logo", 2) * lk.logo_peak
         logo_level = max(lk.logo_idle, logo_lv)
@@ -290,7 +307,8 @@ class MotionEngine:
                 break
 
         return FrameState(
-            t=t, beat=b, levels=np.clip(levels, 0, 1.5).astype(np.float32), flash=np.clip(flash, 0, 1).astype(np.float32),
+            elements=elements,
+            t=t, beat=b, levels=levels, flash=flash,
             bands=bands, env=env_s, beat_pulse=beat_pulse, bloom=min(bloom, 2.0),
             sparkle=lane("fx:sparkle", 1), step=step, blackout=lane("fx:blackout", 1),
             logo_level=logo_level, logo_peak=logo_peak, lyric=lyric, lyric_alpha=max(0.0, lyric_alpha),

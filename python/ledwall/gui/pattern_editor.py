@@ -1,5 +1,7 @@
-"""Pattern editor: drum-machine / piano-roll grid. Rows = members, groups and FX lanes,
-columns = 1/16 steps. Notes have a start, a length and a velocity (brightness)."""
+"""Pattern editor: drum-machine / piano-roll grid. Every element of the song is a folder of lanes
+(All, members, groups, Pulse / Chase / Random / Strobe); notes on them bring the element into the
+scene. Global lanes (sparkle, flash, blackout, band name) sit in their own folder at the bottom.
+Columns = 1/16 steps. Notes have a start, a length and a velocity (brightness)."""
 
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ class PatternGrid(QWidget):
     selectionChanged = pyqtSignal()
     viewChanged = pyqtSignal()
 
-    HEADER_W = 150
+    HEADER_W = 175
     ROW_H = 24
     RULER_H = 20
     EDGE_PX = 6
@@ -39,6 +41,7 @@ class PatternGrid(QWidget):
         self.cursor_step = 0
         self.playhead_step: float | None = None
         self.highlight_bar: int | None = None     # bar opened from the master track
+        self.collapsed: set = set()               # folded element ids (and "global")
         self._drag = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -50,7 +53,26 @@ class PatternGrid(QWidget):
         return self.ctl.current_pattern
 
     def lanes(self):
-        return self.ctl.song.lanes()
+        """Visible rows (folders + the lanes of open folders): [(key, label, kind)]."""
+        return self.ctl.song.lane_rows(self.collapsed)
+
+    def edit_keys(self) -> list:
+        return [k for k, _, kind in self.lanes() if kind != "folder"]
+
+    def _edit_idx_at(self, y: float) -> int:
+        """Index into edit_keys() for a y position (folder rows snap to the lane below)."""
+        rows = self.lanes()
+        row = max(0, min(self.lane_at(y), len(rows) - 1))
+        idx = sum(1 for _, _, kind in rows[:row] if kind != "folder")
+        return max(0, min(idx, len(self.edit_keys()) - 1))
+
+    def toggle_folder(self, fid: str):
+        self.collapsed.symmetric_difference_update({fid})
+        self.refresh_size()
+
+    def set_all_collapsed(self, collapsed: bool):
+        self.collapsed = ({e.id for e in self.ctl.song.elements} | {"global"}) if collapsed else set()
+        self.refresh_size()
 
     def refresh_size(self):
         self.setMinimumHeight(self.RULER_H + self.ROW_H * len(self.lanes()) + 2)
@@ -118,6 +140,9 @@ class PatternGrid(QWidget):
         # rows
         for i, (key, label, kind) in enumerate(lanes):
             y = self.RULER_H + i * self.ROW_H
+            if kind == "folder":
+                p.fillRect(QRectF(self.HEADER_W, y, w, self.ROW_H), QColor(34, 34, 38))
+                continue
             r, g, b = LANE_COLORS[kind]
             base = 22 if i % 2 else 17
             p.fillRect(QRectF(self.HEADER_W, y, w, self.ROW_H), QColor(base + r // 40, base + g // 40, base + b // 40))
@@ -147,12 +172,15 @@ class PatternGrid(QWidget):
                 p.setPen(QColor(200, 200, 200) if beat == 0 else QColor(110, 110, 110))
                 if beat == 0 or self.px * STEPS_PER_BEAT > 26:
                     p.drawText(QPointF(x + 3, 14), f"{bar + 1}" if beat == 0 else f"{bar + 1}.{beat + 1}")
-        # lane separators between member / group / fx blocks
+        # lane separators between blocks; a stronger line above every folder
         prev = None
         for i, (_, _, kind) in enumerate(lanes):
-            if prev and kind != prev:
-                y = self.RULER_H + i * self.ROW_H
-                p.setPen(QPen(QColor(90, 90, 90), 1))
+            y = self.RULER_H + i * self.ROW_H
+            if kind == "folder" and i:
+                p.setPen(QPen(QColor(150, 150, 150), 1))
+                p.drawLine(QPointF(0, y), QPointF(w, y))
+            elif prev and kind != prev and prev != "folder":
+                p.setPen(QPen(QColor(70, 70, 70), 1))
                 p.drawLine(QPointF(self.HEADER_W, y), QPointF(w, y))
             prev = kind
 
@@ -160,6 +188,15 @@ class PatternGrid(QWidget):
         if pat:
             keys = [k for k, _, _ in lanes]
             kinds = {k: kind for k, _, kind in lanes}
+            # collapsed folders show a faint summary of the notes inside them
+            for i, (key, _, kind) in enumerate(lanes):
+                if kind != "folder" or key[5:] not in self.collapsed:
+                    continue
+                prefix = f"e:{key[5:]}|" if key != "fold:global" else "fx:"
+                for n in pat.notes:
+                    if n.lane.startswith(prefix):
+                        rect = self.note_rect(n, i)
+                        p.fillRect(rect.adjusted(0, 4, 0, -4), QColor(255, 200, 140, int(40 + 60 * n.velocity)))
             for n in pat.notes:
                 if n.lane not in keys:
                     continue
@@ -201,12 +238,22 @@ class PatternGrid(QWidget):
         p.fillRect(QRectF(0, 0, self.HEADER_W, h), QColor(20, 20, 20))
         p.fillRect(QRectF(0, 0, w, self.RULER_H), QColor(0, 0, 0, 0))
         p.setFont(QFont("Sans", 9))
+        bold = QFont("Sans", 9, QFont.Weight.Bold)
+        normal = QFont("Sans", 9)
         for i, (key, label, kind) in enumerate(lanes):
             y = self.RULER_H + i * self.ROW_H
-            p.fillRect(QRectF(0, y + 1, 4, self.ROW_H - 2), QColor(*LANE_COLORS[kind]))
-            p.setPen(QColor(220, 220, 220) if kind != "fx" else QColor(190, 170, 230))
-            prefix = {"group": "◆ ", "fx": "", "logo": "★ ", "member": ""}[kind]
-            p.drawText(QRectF(10, y, self.HEADER_W - 12, self.ROW_H), Qt.AlignmentFlag.AlignVCenter, prefix + label)
+            if kind == "folder":
+                p.fillRect(QRectF(0, y, self.HEADER_W, self.ROW_H), QColor(40, 40, 46))
+                p.setFont(bold)
+                p.setPen(QColor(255, 210, 160) if key != "fold:global" else QColor(170, 200, 255))
+                arrow = "▸ " if key[5:] in self.collapsed else "▾ "
+                p.drawText(QRectF(6, y, self.HEADER_W - 8, self.ROW_H), Qt.AlignmentFlag.AlignVCenter, arrow + label)
+                continue
+            p.setFont(normal)
+            p.fillRect(QRectF(14, y + 1, 3, self.ROW_H - 2), QColor(*LANE_COLORS[kind]))
+            p.setPen(QColor(190, 170, 230) if kind in ("fx", "global") else QColor(220, 220, 220))
+            prefix = {"group": "◆ ", "logo": "★ ", "all": "● "}.get(kind, "")
+            p.drawText(QRectF(22, y, self.HEADER_W - 24, self.ROW_H), Qt.AlignmentFlag.AlignVCenter, prefix + label)
         p.setPen(QPen(QColor(60, 60, 60), 1))
         p.drawLine(QPointF(self.HEADER_W, 0), QPointF(self.HEADER_W, h))
         if not pat:
@@ -241,7 +288,7 @@ class PatternGrid(QWidget):
         if not (pat and _CLIPBOARD):
             return
         at = self.cursor_step if at is None else at
-        keys = {k for k, _, _ in self.lanes()}
+        keys = {k for k, _, _ in self.ctl.song.lanes()}
         new = []
         for lane, rel, ln, vel in _CLIPBOARD:
             s = at + rel
@@ -274,11 +321,17 @@ class PatternGrid(QWidget):
         self.setFocus()
         pat = self.pattern
         pos = ev.position()
-        if not pat or pos.x() < self.HEADER_W or pos.y() < self.RULER_H:
+        if pos.y() < self.RULER_H:
             return
         lanes = self.lanes()
         li = self.lane_at(pos.y())
         if not (0 <= li < len(lanes)):
+            return
+        if lanes[li][2] == "folder":            # click a folder row to fold / unfold it
+            if ev.button() == Qt.MouseButton.LeftButton:
+                self.toggle_folder(lanes[li][0][5:])
+            return
+        if not pat or pos.x() < self.HEADER_W:
             return
         stepf = self.step_at(pos.x())
         note = self.note_at(pos)
@@ -311,8 +364,9 @@ class PatternGrid(QWidget):
             if pos.x() > rect.right() - self.EDGE_PX:
                 self._drag = dict(mode="resize", anchor=stepf, orig=[(n, n.length) for n in self.selected], changed=False)
             else:
-                self._drag = dict(mode="move", anchor=stepf, anchor_lane=li, changed=False,
-                                  orig=[(n, n.start, keys.index(n.lane)) for n in self.selected if n.lane in keys])
+                ek = self.edit_keys()
+                self._drag = dict(mode="move", anchor=stepf, anchor_lane=self._edit_idx_at(pos.y()), changed=False,
+                                  orig=[(n, n.start, ek.index(n.lane)) for n in self.selected if n.lane in ek])
             self.update()
             return
 
@@ -354,9 +408,9 @@ class PatternGrid(QWidget):
                 n.length = max(1, min(ln + delta, pat.steps - n.start))
             d["changed"] = True
         elif d["mode"] == "move":
-            keys = [k for k, _, _ in self.lanes()]
+            keys = self.edit_keys()
             dstep = int(round((stepf - d["anchor"]) / self.snap) * self.snap)
-            dlane = self.lane_at(pos.y()) - d["anchor_lane"]
+            dlane = self._edit_idx_at(pos.y()) - d["anchor_lane"]
             if d["orig"]:
                 lo = min(s for _, s, _ in d["orig"])
                 hi = max(s + n.length for n, s, _ in d["orig"])
@@ -428,7 +482,7 @@ class PatternGrid(QWidget):
                     n.start += d
                 self._commit("nudge")
         elif k in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self.selected:
-            keys = [kk for kk, _, _ in self.lanes()]
+            keys = self.edit_keys()
             d = -1 if k == Qt.Key.Key_Up else 1
             idx = [keys.index(n.lane) for n in self.selected if n.lane in keys]
             if idx and 0 <= min(idx) + d and max(idx) + d < len(keys):
@@ -441,7 +495,7 @@ class PatternGrid(QWidget):
 
 
 class PatternTab(QWidget):
-    auditionChanged = pyqtSignal(bool)
+    loopSectionChanged = pyqtSignal(bool)
 
     SNAPS = [("1/16", 1), ("1/8", 2), ("1/4 (beat)", 4), ("1/2", 8), ("1 bar", 16)]
 
@@ -487,15 +541,24 @@ class PatternTab(QWidget):
         self.spin_vel.valueChanged.connect(self._on_velocity)
         form.addRow("Velocity", self.spin_vel)
         ll.addLayout(form)
-        self.chk_audition = QCheckBox("Audition: loop this pattern")
-        self.chk_audition.toggled.connect(self.auditionChanged.emit)
-        ll.addWidget(self.chk_audition)
+        self.chk_loop = QCheckBox("Loop this section while editing")
+        self.chk_loop.setChecked(True)
+        self.chk_loop.setToolTip("Playback loops the master-track clip of this pattern (the one you opened, or the "
+                                 "one under the playhead). A pattern not on the master track loops on its own.")
+        self.chk_loop.toggled.connect(self.loopSectionChanged.emit)
+        ll.addWidget(self.chk_loop)
+        frow = QHBoxLayout()
+        for text, c in (("Fold all", True), ("Unfold all", False)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, cc=c: self.grid.set_all_collapsed(cc))
+            frow.addWidget(b)
+        ll.addLayout(frow)
         btn_fit = QPushButton("Fit pattern to width")
         btn_fit.clicked.connect(lambda: self.grid.fit())
         ll.addWidget(btn_fit)
         ll.addWidget(hint("Drag on empty cells to draw · drag a note to move · drag its right edge to resize · "
                           "right-click / double-click deletes · Shift-drag selects · Ctrl+C / X / V / D · "
-                          "arrows nudge · Ctrl+wheel zooms · Ctrl+Z undo"))
+                          "arrows nudge · Ctrl+wheel zooms · Ctrl+Z undo · click a folder row to fold it"))
 
         self.grid = PatternGrid(ctl)
         self.grid.selectionChanged.connect(self._on_grid_selection)
@@ -648,6 +711,8 @@ class PatternTab(QWidget):
     def _on_changed(self, kind):
         if kind in ("all", "patterns", "band"):
             self.reload_list()
+        elif kind == "elements":
+            self.grid.refresh_size()
         elif kind == "pattern":
             self.grid.update()
         if kind == "all":

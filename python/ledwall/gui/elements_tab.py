@@ -1,7 +1,9 @@
-"""Elements tab: build the visual elements of a song (e.g. just one main hexagon).
+"""Elements tab: build the visual elements of a song (a sunset sun, one hexagon, a single beam...).
 
-Left: layer list (top = front) with visibility checkboxes. Right: properties of the selected
-element. In the preview above, click an element to select it, drag to move, wheel to resize."""
+Left: the elements of this project (top = front). The checkbox = available in this project: checked
+elements get their own folder of lanes in the Pattern Editor, where notes bring them in and out of
+the scene. Right: the settings of the selected element - each type has its own.
+In the preview above (pulse mode): click an element to select it, drag to move, wheel to resize."""
 
 from __future__ import annotations
 
@@ -9,33 +11,67 @@ import copy
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
-    QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMenu, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from ..model import ELEMENT_LABELS, new_id, preset_element
 from .common import ColorButton, LabeledSlider, hint
 
 PRESETS = [
-    ("sun", "Sunset sun"), ("hexagon", "Main hexagon"), ("polygon", "Polygon"), ("ring", "Ring / circle"),
-    ("bars", "Vertical blocks"), ("shafts", "Light shafts"), ("horizon", "Horizon"), ("beam", "Beam / line"),
+    ("sun", "Sunset sun"), ("beam", "Horizontal beam"), ("hexagon", "Hexagon"), ("polygon", "Polygon"),
+    ("ring", "Ring / circle"), ("bar", "Single bar"), ("bars", "Vertical blocks"), ("shafts", "Light shafts"),
+    ("horizon", "Horizon lights"),
 ]
 
-# which properties each element type uses
-TYPE_FIELDS = {
-    "sun":     {"x", "y", "size", "react_scale", "core", "softness", "cuts"},
-    "polygon": {"fill", "sides", "x", "y", "size", "rotation", "spin", "thickness", "react_scale"},
-    "ring":    {"fill", "x", "y", "size", "rotation", "spin", "thickness", "react_scale"},
-    "bars":    {"fill", "x", "size", "height", "thickness", "slats"},
-    "shafts":  {"x", "size", "height", "thickness"},
-    "horizon": {"x", "y", "size", "height", "thickness"},
-    "beam":    {"x", "y", "size", "rotation", "spin", "thickness", "react_scale"},
+INT_ATTRS = {"sides", "count", "lines", "cuts"}
+X = ("x", "Horizontal position", 0, 1, 0.005, "{:.3f}")
+Y = ("y", "Vertical position", 0, 1.2, 0.005, "{:.3f}")
+ROT = ("rotation", "Rotation", -180, 180, 1, "{:.0f}°")
+SPIN = ("spin", "Spin (°/beat)", -30, 30, 0.25, "{:.2f}°")
+THICK = ("thickness", "Line thickness", 1, 30, 0.5, "{:.1f}px")
+GROW = ("react_scale", "Grow when lit", 0, 0.6, 0.01, "{:.2f}")
+FILL = ("fill",)
+
+# shape settings per element type: (attr, label, lo, hi, step, fmt) or ("fill",)
+SHAPE_FIELDS = {
+    "sun": [("size", "Radius", 0.05, 1.3, 0.005, "{:.3f}"), X, ("y", "Horizon line", 0.3, 1.2, 0.005, "{:.3f}"),
+            ("core", "Warm centre", 0, 1, 0.01, "{:.2f}"), ("softness", "Edge softness", 0, 0.3, 0.005, "{:.3f}"),
+            ("cuts", "Horizon cuts", 0, 8, 1, "{:.0f}")],
+    "polygon": [("sides", "Sides", 3, 12, 1, "{:.0f}"), ("size", "Radius", 0.02, 1.0, 0.005, "{:.3f}"), FILL, THICK,
+                X, Y, ROT, SPIN],
+    "ring": [("count", "Arcs", 1, 24, 1, "{:.0f}"), ("size", "Radius", 0.02, 1.0, 0.005, "{:.3f}"), FILL, THICK, X, Y, ROT, SPIN],
+    "bars": [("count", "Number of bars", 1, 48, 1, "{:.0f}"), ("size", "Total width", 0.01, 1.0, 0.005, "{:.3f}"),
+             ("height", "Max height", 0.1, 1.0, 0.01, "{:.2f}"), ("gap", "Gap between bars", 0, 3, 0.02, "{:.2f}"),
+             FILL, ("thickness", "Outline", 0, 12, 0.5, "{:.1f}px"), X],
+    "shafts": [("count", "Number of shafts", 1, 24, 1, "{:.0f}"), ("size", "Total width", 0.02, 1.0, 0.005, "{:.3f}"),
+               ("height", "Max height", 0.1, 1.0, 0.01, "{:.2f}"), THICK, X],
+    "horizon": [("count", "Number of lights", 1, 24, 1, "{:.0f}"), ("size", "Width", 0.02, 1.0, 0.005, "{:.3f}"),
+                ("height", "Cone height", 0.1, 1.0, 0.01, "{:.2f}"), THICK, X, Y],
+    "beam": [("count", "Segments", 1, 24, 1, "{:.0f}"), ("size", "Length", 0.02, 1.0, 0.005, "{:.3f}"),
+             ("lines", "Parallel lines", 1, 8, 1, "{:.0f}"), ("spacing", "Line spacing", 0.005, 0.3, 0.005, "{:.3f}"),
+             THICK, X, Y, ROT, SPIN],
 }
-SIZE_LABEL = {"sun": "Radius", "polygon": "Radius", "ring": "Radius", "beam": "Length"}
+LIGHT_FIELDS = {
+    "sun": [("glow", "Halo", 0, 3, 0.05, "{:.2f}"), ("idle", "Resting brightness", 0, 1, 0.01, "{:.2f}"),
+            ("react_scale", "Breathing", 0, 0.1, 0.002, "{:.3f}")],
+}
+DEFAULT_LIGHT = [("glow", "Glow", 0, 3, 0.05, "{:.2f}"), ("idle", "Idle glow in scene", 0, 1, 0.01, "{:.2f}")]
+PARTS_HINT = {
+    "sun": "One part: lit by the brightest of its lanes.",
+    "polygon": "Each side is a part.",
+}
+
+
+def _light_fields(t):
+    if t in LIGHT_FIELDS:
+        return LIGHT_FIELDS[t]
+    extra = [GROW] if t in ("polygon", "ring", "beam") else []
+    return DEFAULT_LIGHT + extra
 
 
 class ElementsTab(QWidget):
-    previewLitChanged = pyqtSignal(bool)
+    previewModeChanged = pyqtSignal(bool)
 
     def __init__(self, ctl, parent=None):
         super().__init__(parent)
@@ -71,26 +107,24 @@ class ElementsTab(QWidget):
             b.clicked.connect(lambda _=False, dd=d: self.move(dd))
             row2.addWidget(b)
         ll.addLayout(row2)
-        self.chk_lit = QCheckBox("Preview with everything lit")
-        self.chk_lit.setChecked(True)
-        self.chk_lit.toggled.connect(self.previewLitChanged.emit)
-        ll.addWidget(self.chk_lit)
-        ll.addWidget(hint("In the preview: click an element to select it, drag to move it, mouse wheel to resize. "
-                          "Double-click a name to rename. Uncheck to hide."))
+        self.chk_pulse = QCheckBox("Preview: every element pulsing")
+        self.chk_pulse.setChecked(True)
+        self.chk_pulse.setToolTip("Unchecked: the preview shows the song at the playhead instead")
+        self.chk_pulse.toggled.connect(self.previewModeChanged.emit)
+        ll.addWidget(self.chk_pulse)
+        ll.addWidget(hint("Checked = available in this project: it gets its own folder of lanes in the Pattern "
+                          "Editor, where notes bring it in and out of the scene. Click an element in the preview "
+                          "to select it, drag to move, mouse wheel to resize. Double-click a name to rename."))
 
         # ---- properties --------------------------------------------------------------------
         props = QWidget()
-        self.form = QFormLayout(props)
+        pv = QVBoxLayout(props)
+        top = QFormLayout()
         self.lbl_type = QLabel()
-        self.form.addRow("Type", self.lbl_type)
+        top.addRow("Type", self.lbl_type)
         self.edit_name = QLineEdit()
         self.edit_name.textEdited.connect(lambda t: self._set("name", t, refresh_list=True))
-        self.form.addRow("Name", self.edit_name)
-        self.combo_driver = QComboBox()
-        self.combo_driver.setToolTip("What lights this element. 'All members' splits it into one part per member "
-                                     "(hexagon edges, ring arcs, block clusters, beam segments).")
-        self.combo_driver.currentIndexChanged.connect(lambda i: self._set("driver", self.combo_driver.itemData(i)))
-        self.form.addRow("Lit by", self.combo_driver)
+        top.addRow("Name", self.edit_name)
         crow = QHBoxLayout()
         self.combo_color = QComboBox()
         for key, label in (("main", "Song colour"), ("accent", "Accent colour"), ("custom", "Custom")):
@@ -100,42 +134,29 @@ class ElementsTab(QWidget):
         self.btn_custom.colorChanged.connect(lambda rgb: self._set("custom_rgb", tuple(rgb)))
         crow.addWidget(self.combo_color, 1)
         crow.addWidget(self.btn_custom, 1)
-        self.form.addRow("Colour", crow)
-        self.color_row = crow
-        self.combo_fill = QComboBox()
-        for key, label in (("outline", "Outline (neon tube)"), ("filled", "Filled"), ("gradient", "Gradient fill")):
-            self.combo_fill.addItem(label, key)
-        self.combo_fill.currentIndexChanged.connect(lambda i: self._set("fill", self.combo_fill.itemData(i)))
-        self.form.addRow("Fill", self.combo_fill)
-        self.spin_sides = QSpinBox()
-        self.spin_sides.setRange(3, 12)
-        self.spin_sides.valueChanged.connect(lambda v: self._set("sides", v))
-        self.form.addRow("Sides", self.spin_sides)
-
-        self.sliders = {}
-        for attr, label, lo, hi, step, fmt in (
-            ("x", "Horizontal position", 0, 1, 0.005, "{:.3f}"),
-            ("y", "Vertical position", 0, 1, 0.005, "{:.3f}"),
-            ("size", "Size", 0.02, 1.0, 0.005, "{:.3f}"),
-            ("height", "Height", 0.1, 1.0, 0.01, "{:.2f}"),
-            ("rotation", "Rotation", -180, 180, 1, "{:.0f}°"),
-            ("spin", "Spin", -30, 30, 0.25, "{:.2f}°/b"),
-            ("thickness", "Line thickness", 1, 30, 0.5, "{:.1f}px"),
-            ("glow", "Glow", 0, 3, 0.05, "{:.2f}"),
-            ("idle", "Idle visibility", 0, 1, 0.01, "{:.2f}"),
-            ("react_scale", "Grow when lit", 0, 0.6, 0.01, "{:.2f}"),
-            ("slats", "Slats per member", 1, 6, 1, "{:.0f}"),
-            ("core", "Warm centre", 0, 1, 0.01, "{:.2f}"),
-            ("softness", "Edge softness", 0, 0.3, 0.005, "{:.3f}"),
-            ("cuts", "Horizon cuts", 0, 8, 1, "{:.0f}"),
-        ):
-            s = LabeledSlider(lo, hi, lo, step, fmt)
-            s.valueChanged.connect(lambda v, a=attr: self._set(a, int(round(v)) if a in ("slats", "cuts") else v))
-            self.form.addRow(label, s)
-            self.sliders[attr] = s
-        self.empty = QLabel("Add an element with  Add  — for example a single main hexagon.")
+        top.addRow("Colour", crow)
+        self.lbl_parts = hint("")
+        top.addRow(self.lbl_parts)
+        self.box_top = QWidget()
+        self.box_top.setLayout(top)
+        pv.addWidget(self.box_top)
+        self.grp_shape = QGroupBox("Shape")
+        self.grp_light = QGroupBox("Light")
+        for grp in (self.grp_shape, self.grp_light):
+            gl = QVBoxLayout(grp)
+            gl.setContentsMargins(4, 4, 4, 4)
+            grp.inner = None
+        cols = QHBoxLayout()
+        cols.addWidget(self.grp_shape, 1)
+        cols.addWidget(self.grp_light, 1)
+        pv.addLayout(cols)
+        pv.addStretch(1)
+        self.empty = QLabel("Add an element with  Add  — for example a sunset sun or a single beam.")
         self.empty.setObjectName("hint")
-        self.form.addRow(self.empty)
+        pv.addWidget(self.empty)
+        self.sliders: dict = {}
+        self.combo_fill = None
+        self._built_for = None      # (element id, type) the dynamic forms were built for
         scroll = QScrollArea()
         scroll.setWidget(props)
         scroll.setWidgetResizable(True)
@@ -179,6 +200,9 @@ class ElementsTab(QWidget):
         el.x = min(1.0, el.x + 0.05)
         els = self.ctl.song.elements
         els.insert(els.index(src), el)
+        for p in self.ctl.song.patterns:      # the copy starts with the same lanes / notes
+            p.notes += [type(n)(n.lane.replace(f"e:{src.id}|", f"e:{el.id}|", 1), n.start, n.length, n.velocity)
+                        for n in p.notes if n.lane.startswith(f"e:{src.id}|")]
         self.selected_id = el.id
         self._commit()
 
@@ -188,7 +212,7 @@ class ElementsTab(QWidget):
             return
         els = self.ctl.song.elements
         i = els.index(el)
-        els.remove(el)
+        self.ctl.song.remove_element(el.id)
         self.selected_id = els[min(i, len(els) - 1)].id if els else None
         self._commit()
 
@@ -238,20 +262,7 @@ class ElementsTab(QWidget):
             if el.id == self.selected_id:
                 self.list.setCurrentItem(it)
         self._updating = False
-        self._reload_drivers()
         self.load_fields()
-
-    def _reload_drivers(self):
-        self._updating = True
-        self.combo_driver.clear()
-        self.combo_driver.addItem("All members (one part each)", "members")
-        for m in self.ctl.song.members:
-            self.combo_driver.addItem(f"Member: {m.name}", f"m:{m.id}")
-        for g in self.ctl.song.groups:
-            self.combo_driver.addItem(f"Group: {g.name}", f"g:{g.id}")
-        self.combo_driver.addItem("Always on", "always")
-        self.combo_driver.addItem("Audio level", "audio")
-        self._updating = False
 
     def _on_select(self, cur, _prev):
         if self._updating or cur is None:
@@ -274,41 +285,60 @@ class ElementsTab(QWidget):
             self._commit()
 
     # ---- property panel ---------------------------------------------------------------------
+    def _build_forms(self, el):
+        """(Re)build the Shape / Light forms for this element's type."""
+        self.sliders, self.combo_fill = {}, None
+        for grp, specs in ((self.grp_shape, SHAPE_FIELDS.get(el.type, [])), (self.grp_light, _light_fields(el.type))):
+            if grp.inner is not None:
+                grp.inner.setParent(None)
+                grp.inner.deleteLater()
+            grp.inner = QWidget()
+            grp.layout().addWidget(grp.inner)
+            form = QFormLayout(grp.inner)
+            for spec in specs:
+                if spec[0] == "fill":
+                    cb = QComboBox()
+                    for key, label in (("outline", "Outline (neon tube)"), ("filled", "Filled"), ("gradient", "Gradient fill")):
+                        cb.addItem(label, key)
+                    cb.currentIndexChanged.connect(lambda i, c=cb: self._set("fill", c.itemData(i)))
+                    form.addRow("Fill", cb)
+                    self.combo_fill = cb
+                    continue
+                attr, label, lo, hi, step, fmt = spec
+                sl = LabeledSlider(lo, hi, lo, step, fmt)
+                sl.valueChanged.connect(lambda v, a=attr: self._set(a, int(round(v)) if a in INT_ATTRS else v))
+                form.addRow(label, sl)
+                self.sliders[attr] = sl
+        self._built_for = (el.id, el.type)
+
     def load_fields(self):
         el = self.element
         self._updating = True
         has = el is not None
-        fields = TYPE_FIELDS.get(el.type, set()) if el else set()
         self.empty.setVisible(not has)
-        for w in (self.lbl_type, self.edit_name, self.combo_driver, self.color_row):
-            self.form.setRowVisible(w, has)
-        self.form.setRowVisible(self.combo_fill, "fill" in fields)
-        self.form.setRowVisible(self.spin_sides, "sides" in fields)
-        for attr, s in self.sliders.items():
-            self.form.setRowVisible(s, has and (attr in fields or attr in ("glow", "idle")))
+        for w in (self.box_top, self.grp_shape, self.grp_light):
+            w.setVisible(has)
         if el:
+            if self._built_for != (el.id, el.type):
+                self._build_forms(el)
             self.lbl_type.setText(ELEMENT_LABELS.get(el.type, el.type))
             if self.edit_name.text() != el.name:
                 self.edit_name.setText(el.name)
-            self.combo_driver.setCurrentIndex(max(0, self.combo_driver.findData(el.driver)))
             self.combo_color.setCurrentIndex(max(0, self.combo_color.findData(el.color)))
             self.btn_custom.set_rgb(el.custom_rgb)
             self.btn_custom.setEnabled(el.color == "custom")
-            self.combo_fill.setCurrentIndex(max(0, self.combo_fill.findData(el.fill)))
-            self.spin_sides.setValue(el.sides)
-            for attr, s in self.sliders.items():
-                s.set_value(getattr(el, attr))
-            lab = self.form.labelForField(self.sliders["size"])
-            if lab:
-                lab.setText(SIZE_LABEL.get(el.type, "Width"))
-            lab = self.form.labelForField(self.sliders["idle"])
-            if lab:   # for the sun, idle is the resting brightness and 1 - idle is how far a pulse goes
-                lab.setText("Resting brightness" if el.type == "sun" else "Idle visibility")
+            if self.combo_fill is not None:
+                self.combo_fill.setCurrentIndex(max(0, self.combo_fill.findData(el.fill)))
+            for attr, sl in self.sliders.items():
+                sl.set_value(getattr(el, attr))
+            n = {"sun": 1, "polygon": el.sides}.get(el.type, el.count)
+            m = len(self.ctl.song.members)
+            share = PARTS_HINT.get(el.type) or (
+                f"{n} part{'s' if n != 1 else ''} shared between {m} members"
+                + (" — each part lights when any of its members does." if n < m else "."))
+            self.lbl_parts.setText(share)
         self._updating = False
 
     def _on_changed(self, kind):
-        if kind in ("all", "elements"):
+        if kind in ("all", "elements", "band"):
             self.reload()
-        elif kind == "band":
-            self._reload_drivers()
-            self.load_fields()

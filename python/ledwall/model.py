@@ -32,6 +32,7 @@ PATTERN_COLORS = [
 ]
 
 ELEMENT_TYPES = [
+    ("sun",     "Sunset Sun"),
     ("polygon", "Polygon / Hexagon"),
     ("ring",    "Ring / Circle"),
     ("bars",    "Vertical Blocks"),
@@ -125,11 +126,16 @@ class Element:
     idle: float = 0.12
     react_scale: float = 0.08    # polygon / ring grow with the level
     slats: int = 3               # bars per member
+    core: float = 0.5            # sun: how much the centre glows towards white
+    softness: float = 0.025      # sun: edge feather (fraction of the radius)
+    cuts: int = 0                # sun: horizontal cut lines near the horizon
 
 
 def preset_element(kind: str) -> Element:
     """Ready-made elements offered in the Elements tab."""
     presets = {
+        "sun": dict(name="Sun", type="sun", x=0.5, y=1.0, size=0.82, idle=0.72, glow=0.35, react_scale=0.012,
+                    core=0.55, softness=0.025),
         "hexagon": dict(name="Main hexagon", type="polygon", sides=6, x=0.5, y=0.58, size=0.3, thickness=7,
                         fill="outline", glow=1.3, idle=0.15),
         "polygon": dict(name="Polygon", type="polygon", sides=6, x=0.5, y=0.58, size=0.25),
@@ -145,7 +151,7 @@ def preset_element(kind: str) -> Element:
 
 @dataclass
 class Look:
-    main_rgb: tuple = (255, 168, 40)        # THE song colour, shared by every member
+    main_rgb: tuple = (255, 186, 128)       # THE song colour, shared by every member
     accent_rgb: tuple = (255, 240, 215)     # flashes / strobes / peaks
     glow_radius: float = 26.0
     glow_intensity: float = 1.0
@@ -293,4 +299,4 @@ def default_song() -> Song:
         Clip(new_id(), chorus.id, 0, 48.0, 32.0),
     ]
     lyrics = [LyricClip(new_id(), "lyrics go here in the chorus", 48.0, 16.0)]
-    return Song(members, groups, [intro, groove, chorus, build], clips, lyrics, [preset_element("bars")])
+    return Song(members, groups, [intro, groove, chorus, build], clips, lyrics, [preset_element("sun")])

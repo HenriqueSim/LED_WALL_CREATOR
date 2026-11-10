@@ -17,12 +17,13 @@ from ..model import ELEMENT_LABELS, new_id, preset_element
 from .common import ColorButton, LabeledSlider, hint
 
 PRESETS = [
-    ("hexagon", "Main hexagon"), ("polygon", "Polygon"), ("ring", "Ring / circle"),
+    ("sun", "Sunset sun"), ("hexagon", "Main hexagon"), ("polygon", "Polygon"), ("ring", "Ring / circle"),
     ("bars", "Vertical blocks"), ("shafts", "Light shafts"), ("horizon", "Horizon"), ("beam", "Beam / line"),
 ]
 
 # which properties each element type uses
 TYPE_FIELDS = {
+    "sun":     {"x", "y", "size", "react_scale", "core", "softness", "cuts"},
     "polygon": {"fill", "sides", "x", "y", "size", "rotation", "spin", "thickness", "react_scale"},
     "ring":    {"fill", "x", "y", "size", "rotation", "spin", "thickness", "react_scale"},
     "bars":    {"fill", "x", "size", "height", "thickness", "slats"},
@@ -30,7 +31,7 @@ TYPE_FIELDS = {
     "horizon": {"x", "y", "size", "height", "thickness"},
     "beam":    {"x", "y", "size", "rotation", "spin", "thickness", "react_scale"},
 }
-SIZE_LABEL = {"polygon": "Radius", "ring": "Radius", "beam": "Length"}
+SIZE_LABEL = {"sun": "Radius", "polygon": "Radius", "ring": "Radius", "beam": "Length"}
 
 
 class ElementsTab(QWidget):
@@ -124,9 +125,12 @@ class ElementsTab(QWidget):
             ("idle", "Idle visibility", 0, 1, 0.01, "{:.2f}"),
             ("react_scale", "Grow when lit", 0, 0.6, 0.01, "{:.2f}"),
             ("slats", "Slats per member", 1, 6, 1, "{:.0f}"),
+            ("core", "Warm centre", 0, 1, 0.01, "{:.2f}"),
+            ("softness", "Edge softness", 0, 0.3, 0.005, "{:.3f}"),
+            ("cuts", "Horizon cuts", 0, 8, 1, "{:.0f}"),
         ):
             s = LabeledSlider(lo, hi, lo, step, fmt)
-            s.valueChanged.connect(lambda v, a=attr: self._set(a, int(round(v)) if a == "slats" else v))
+            s.valueChanged.connect(lambda v, a=attr: self._set(a, int(round(v)) if a in ("slats", "cuts") else v))
             self.form.addRow(label, s)
             self.sliders[attr] = s
         self.empty = QLabel("Add an element with  Add  — for example a single main hexagon.")
@@ -297,6 +301,9 @@ class ElementsTab(QWidget):
             lab = self.form.labelForField(self.sliders["size"])
             if lab:
                 lab.setText(SIZE_LABEL.get(el.type, "Width"))
+            lab = self.form.labelForField(self.sliders["idle"])
+            if lab:   # for the sun, idle is the resting brightness and 1 - idle is how far a pulse goes
+                lab.setText("Resting brightness" if el.type == "sun" else "Idle visibility")
         self._updating = False
 
     def _on_changed(self, kind):

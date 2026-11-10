@@ -73,6 +73,7 @@ class FrameRenderer:
         self.ambient = np.exp(-(((xs - self.sw / 2) / (self.sw * 0.55)) ** 2 + ((self.sh - ys) / (self.sh * 0.38)) ** 2))[..., None]
         self._grad_cache: dict = {}
         self._layout_cache: dict = {}
+        self._sun_cache: dict = {}
         self._logo_key = None
         self._lyric_cache: dict = {}
         self.bboxes: dict = {}          # element id -> (x0, y0, x1, y1) in pixels, for hit-testing in the GUI
@@ -158,7 +159,7 @@ class FrameRenderer:
         core.fill(0)
         glow_src = np.zeros((self.sh, self.sw, 3), np.float32)
         self.bboxes = {}
-        drawers = {"polygon": self._draw_polygon, "ring": self._draw_ring, "bars": self._draw_bars,
+        drawers = {"sun": self._draw_sun, "polygon": self._draw_polygon, "ring": self._draw_ring, "bars": self._draw_bars,
                    "shafts": self._draw_shafts, "horizon": self._draw_horizon, "beam": self._draw_beam}
         any_visible = False
         for el in reversed(song.elements):          # list top = front layer
@@ -169,7 +170,9 @@ class FrameRenderer:
             layer.fill(0)
             soft = fn(layer, el, st, song)
             cv2.max(core, layer, dst=core)
-            g = el.glow * (0.45 if el.fill != "outline" and el.type in ("polygon", "ring") else 1.0)  # big fills bloom less
+            g = el.glow * (0.45 if el.fill != "outline" and el.type in ("polygon", "ring") else 1.0)
+            if el.type == "sun":
+                g = 0.0                                # the sun brings its own halo (soft) so its face keeps its colour  # big fills bloom less
             if g > 0:
                 glow_src += cv2.resize(layer, (self.sw, self.sh), interpolation=cv2.INTER_AREA).astype(np.float32) * g
             if soft is not None:
@@ -192,6 +195,80 @@ class FrameRenderer:
         if st.lyric and st.lyric_alpha > 0.003:
             self._overlay_lyric(out, st, song)
         return out
+
+    # ---- element: sunset sun -------------------------------------------------------------
+    def _sun_maps(self, cx, cy, R, soft, cuts):
+        """(x0, y0, alpha, heat) of the half disc at 1/2 resolution, cropped to its box. Cached."""
+        key = (round(cx / 2), round(cy / 2), round(R / 2), round(soft, 3), int(cuts), self.w, self.h)
+        hit = self._sun_cache.get(key)
+        if hit is not None:
+            return hit
+        if len(self._sun_cache) > 24:
+            self._sun_cache.clear()
+        hw, hh = max(2, self.w // 2), max(2, self.h // 2)
+        c, r = cx / 2, max(1.0, R / 2)
+        feather = max(0.75, soft * r)
+        x0, x1 = max(0, int(c - r - feather * 2)), min(hw, int(math.ceil(c + r + feather * 2)))
+        y0, y1 = max(0, int(cy / 2 - r - feather * 2)), min(hh, int(math.ceil(cy / 2 + 1)))
+        if x1 <= x0 or y1 <= y0:
+            self._sun_cache[key] = None
+            return None
+        ys, xs = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+        dx, dy = xs + 0.5 - c, ys + 0.5 - cy / 2
+        d = np.sqrt(dx * dx + dy * dy)
+        alpha = np.clip((r - d) / feather + 0.5, 0.0, 1.0)
+        alpha = alpha * alpha * (3 - 2 * alpha)                       # smoothstep edge
+        alpha *= np.clip(cy / 2 - (ys + 0.5) + 0.5, 0.0, 1.0)         # cut at the horizon
+        u = np.clip(d / r, 0.0, 1.0)
+        heat = (1.0 - u) ** 1.6                                       # hottest at the centre
+        if cuts > 0:   # retro horizontal cut lines, thicker towards the horizon
+            band_top = r * 0.55
+            hgt = np.clip(-dy, 0, None)
+            for i in range(int(cuts)):
+                f = (i + 0.5) / cuts
+                yc = band_top * (1 - f)
+                th = max(0.6, r * 0.018 * (0.4 + 1.2 * f))
+                alpha *= np.clip(np.abs(hgt - yc) / th - 0.5, 0.0, 1.0)
+        res = (x0, y0, alpha[..., None].astype(np.float32), heat[..., None].astype(np.float32))
+        self._sun_cache[key] = res
+        return res
+
+    def _draw_sun(self, layer, el, st, song):
+        lk = song.look
+        levels, _, flash = self._drive(el, st, song)
+        lv = np.minimum(levels, 1.2)
+        v = 0.6 * float(lv.max()) + 0.4 * float(lv.mean())               # one gentle level for the whole sun
+        f = 0.6 * float(flash.max()) if len(flash) else 0.0
+        bright = el.idle + (1.0 - el.idle) * min(1.0, v)
+        cx, cy = el.x * self.w, el.y * self.h
+        R = el.size * self.h * (1.0 + el.react_scale * min(1.0, v))
+        self.bboxes[el.id] = (cx - R, cy - R, cx + R, cy)
+        maps = self._sun_maps(cx, cy, R, el.softness, el.cuts)
+        if maps is None:
+            return None
+        x0, y0, alpha, heat = maps
+        base = np.array(self.element_rgb(el, lk), np.float32)
+        base = base * (1 - f) + np.array(lk.accent_rgb, np.float32) * f
+        edge = np.array(_bgr(base * 0.92), np.float32)
+        hot = np.array(_bgr(base * (1 - 0.45) + 255.0 * 0.45), np.float32)
+        hot = edge + (hot - edge) * el.core
+        img = alpha * (edge + (hot - edge) * heat) * bright
+        img = np.clip(img, 0, 255).astype(np.uint8)
+        hh, ww = img.shape[:2]
+        X0, Y0 = x0 * 2, y0 * 2
+        X1, Y1 = min(self.w, X0 + ww * 2), min(self.h, Y0 + hh * 2)
+        big = cv2.resize(img, (ww * 2, hh * 2), interpolation=cv2.INTER_LINEAR)[: Y1 - Y0, : X1 - X0]
+        cv2.max(layer[Y0:Y1, X0:X1], big, dst=layer[Y0:Y1, X0:X1])
+        if el.glow <= 0:
+            return None
+        # halo only outside the disc: quarter-res alpha, blurred, minus the disc itself
+        a = np.zeros((self.sh, self.sw), np.float32)
+        q = cv2.resize(alpha[..., 0], (max(1, ww // 2), max(1, hh // 2)), interpolation=cv2.INTER_AREA)
+        qx, qy = x0 // 2, y0 // 2
+        qh, qw = min(q.shape[0], self.sh - qy), min(q.shape[1], self.sw - qx)
+        a[qy:qy + qh, qx:qx + qw] = q[:qh, :qw]
+        halo = cv2.GaussianBlur(a, (0, 0), max(1.0, R / self.DS * 0.12)) * np.clip((1.0 - a) * 3.0, 0.0, 1.0)
+        return halo[..., None] * (edge * bright * el.glow * 0.9)
 
     # ---- element: polygon (hexagon) ------------------------------------------------------
     def _draw_polygon(self, layer, el, st, song):
@@ -500,6 +577,12 @@ class FrameRenderer:
             return
         x0, y0, x1, y1, fill, tight, wide, halo = layers
         L, P = min(st.logo_level, 1.0), st.logo_peak
+        if lk.logo_color == "cutout":   # dark silhouette cut into whatever is behind it (e.g. the sun)
+            roi = img[y0:y1, x0:x1].astype(np.float32)
+            k = min(1.0, L + 0.3 * P)
+            roi *= 1.0 - np.clip(fill * 0.94 + tight * 0.25, 0, 1) * k
+            img[y0:y1, x0:x1] = roi.astype(np.uint8)
+            return
         col = {"main": lk.main_rgb, "white": (255, 255, 255)}.get(lk.logo_color, lk.accent_rgb)
         roi = img[y0:y1, x0:x1].astype(np.float32)
         roi *= 1.0 - halo * 0.88 * min(1.0, L * 1.6 + P)      # dark halo keeps the name readable

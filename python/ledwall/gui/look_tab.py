@@ -16,6 +16,10 @@ SONG_COLORS = [
     ("Amber", (255, 168, 40)), ("Gold", (255, 205, 60)), ("Red", (235, 50, 35)), ("Rose", (255, 80, 130)),
     ("Violet", (160, 90, 255)), ("Blue", (60, 120, 255)), ("Cyan", (40, 210, 255)), ("Green", (90, 230, 110)),
 ]
+PASTEL_COLORS = [
+    ("Apricot", (255, 186, 128)), ("Peach", (255, 170, 140)), ("Blush", (248, 160, 175)), ("Butter", (255, 222, 150)),
+    ("Lilac", (198, 170, 245)), ("Sky", (160, 198, 250)), ("Mint", (165, 228, 200)), ("Sand", (235, 200, 165)),
+]
 
 
 class LookTab(QWidget):
@@ -66,16 +70,17 @@ class LookTab(QWidget):
         self.btn_main = ColorButton(lk.main_rgb)
         self.btn_main.colorChanged.connect(lambda rgb: self._set("main_rgb", tuple(rgb)))
         fs.addRow("Song colour", self.btn_main)
-        sw = QHBoxLayout()
-        sw.setSpacing(3)
-        for name, rgb in SONG_COLORS:
-            b = QPushButton()
-            b.setFixedSize(26, 22)
-            b.setToolTip(name)
-            b.setStyleSheet(f"background: rgb{rgb}; border: 1px solid #444;")
-            b.clicked.connect(lambda _=False, c=rgb: (self.btn_main.set_rgb(c), self._set("main_rgb", c)))
-            sw.addWidget(b)
-        fs.addRow(sw)
+        for title, palette in (("Vivid", SONG_COLORS), ("Pastel", PASTEL_COLORS)):
+            sw = QHBoxLayout()
+            sw.setSpacing(3)
+            for name, rgb in palette:
+                b = QPushButton()
+                b.setFixedSize(26, 22)
+                b.setToolTip(name)
+                b.setStyleSheet(f"background: rgb{rgb}; border: 1px solid #444;")
+                b.clicked.connect(lambda _=False, c=rgb: (self.btn_main.set_rgb(c), self._set("main_rgb", c)))
+                sw.addWidget(b)
+            fs.addRow(title, sw)
         self.btn_accent = ColorButton(lk.accent_rgb)
         self.btn_accent.colorChanged.connect(lambda rgb: self._set("accent_rgb", tuple(rgb)))
         fs.addRow("Accent (flash)", self.btn_accent)
@@ -110,7 +115,7 @@ class LookTab(QWidget):
         self.chk_stacked.toggled.connect(lambda v: self._set("logo_stacked", v))
         fl.addRow(self.chk_stacked)
         self.combo_logo_col = QComboBox()
-        for key, label in (("accent", "Accent colour"), ("main", "Song colour"), ("white", "White")):
+        for key, label in (("accent", "Accent colour"), ("main", "Song colour"), ("white", "White"), ("cutout", "Dark cut-out (silhouette)")):
             self.combo_logo_col.addItem(label, key)
         self.combo_logo_col.currentIndexChanged.connect(lambda i: self._set("logo_color", self.combo_logo_col.itemData(i)))
         fl.addRow("Colour", self.combo_logo_col)

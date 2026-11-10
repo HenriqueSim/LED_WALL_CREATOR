@@ -35,8 +35,14 @@ tabs below. A typical song goes through them in this order:
    and use the wheel to resize it. Each type shows only its own settings, e.g. a hexagon's radius and sides,
    the number of bars, or a beam's segments and parallel lines. In the preview you can click an
    element to select it, drag it to move it and use the mouse wheel to resize it. While you're in
-   this tab the preview pulses every element on the beat, so you can see the effect. The checkbox
-   next to an element means *available in this project*. The top of the list is the front layer.
+   this tab the preview pulses the selected pattern's elements on the beat, so you can see the
+   effect. The top of the list is the front layer.
+
+   Elements are shared by the whole song (an element looks the same everywhere it is used), and
+   **each pattern chooses which ones it uses**: pick the pattern at the top of the list and tick
+   its elements. The intro could be just the sun, and the chorus the sun plus a beam. A new
+   pattern starts with the same elements as the one you were on, and *Add* puts a new element in
+   the selected pattern only.
 
    **★ Band name**, at the top of the list, holds the band name layer: the text, the **font**
    (eight fonts ship with the app so they look the same on every computer, and any installed font
@@ -50,7 +56,7 @@ tabs below. A typical song goes through them in this order:
    segment. A 1-segment beam or a single bar lights up when anyone in it plays.
 
 4. **Pattern Editor: draw the light.** A pattern is a loop of 1–16 bars on a 1/16 grid. Every
-   element is a folder of lanes:
+   element the pattern uses is a folder of lanes:
    - **All**: the whole element
    - **one lane per member** and **one per group**: their parts of that element
    - **Pulse / Chase / Random / Strobe**: motion on that element

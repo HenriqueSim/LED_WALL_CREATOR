@@ -122,6 +122,10 @@ class Pattern:
     bars: int = 1
     color: tuple = (255, 160, 40)
     notes: list = field(default_factory=list)
+    elements: list | None = None     # ids of the song's elements this pattern uses (None = all of them)
+
+    def uses(self, eid: str) -> bool:
+        return self.elements is None or eid in self.elements
 
     @property
     def steps(self) -> int:
@@ -153,7 +157,8 @@ class LyricClip:
 class Element:
     """One visual element of the wall. It is lit by its own lanes in the pattern editor and is only
     in the scene while one of them plays. Its parts (edges, bars, segments...) are shared out between
-    the members in order. `visible` = available in this project."""
+    the members in order. Elements are shared by the whole song; each pattern chooses which ones it
+    uses (Pattern.elements). `visible` is only kept for loading old projects."""
     id: str
     name: str
     type: str = "polygon"
@@ -277,8 +282,11 @@ class Song:
     loop: bool = False
 
     # ---- lookups -----------------------------------------------------------
-    def active_elements(self) -> list:
-        return [e for e in self.elements if e.visible]
+    def pattern_elements(self, pat) -> list:
+        """The elements a pattern uses, in layer order (all of them when pat is None)."""
+        if pat is None:
+            return list(self.elements)
+        return [e for e in self.elements if pat.uses(e.id)]
 
     def element_sublanes(self, el) -> list:
         """[(lane key, label, kind)] inside one element's folder."""
@@ -288,19 +296,19 @@ class Song:
         out += [(el_lane(el.id, k), label, "fx") for k, label, _ in ELEMENT_FX]
         return out
 
-    def lanes(self) -> list:
-        """Every note lane, flat: [(lane key, label, kind)]."""
+    def lanes(self, pat=None) -> list:
+        """Every note lane of a pattern (or of all elements), flat: [(lane key, label, kind)]."""
         out = []
-        for el in self.active_elements():
+        for el in self.pattern_elements(pat):
             out += self.element_sublanes(el)
         out += [(f"fx:{k}", label, "logo" if k == "logo" else "global") for k, label, _ in GLOBAL_FX]
         return out
 
-    def lane_rows(self, collapsed=frozenset()) -> list:
-        """Rows of the pattern editor: folder rows ("fold:<eid>", name, "folder") followed by their
-        lanes unless collapsed, then the global folder."""
+    def lane_rows(self, pat=None, collapsed=frozenset()) -> list:
+        """Rows of the pattern editor for a pattern: a folder row ("fold:<eid>", name, "folder") per
+        element it uses, followed by its lanes unless collapsed, then the global folder."""
         rows = []
-        for el in self.active_elements():
+        for el in self.pattern_elements(pat):
             rows.append((f"fold:{el.id}", el.name, "folder"))
             if el.id not in collapsed:
                 rows += self.element_sublanes(el)
@@ -350,6 +358,8 @@ class Song:
         self.elements = [e for e in self.elements if e.id != eid]
         for p in self.patterns:
             p.notes = [n for n in p.notes if split_lane(n.lane)[0] != eid]
+            if p.elements is not None:
+                p.elements = [x for x in p.elements if x != eid]
 
     def element(self, eid: str) -> Element | None:
         return next((e for e in self.elements if e.id == eid), None)
@@ -361,12 +371,12 @@ class Song:
     # ---- (de)serialisation ---------------------------------------------------
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["version"] = 3
+        d["version"] = 4
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "Song":
-        if d.get("version") not in (2, 3):
+        if d.get("version") not in (2, 3, 4):
             raise ValueError("This project was made with an older version of the app (no patterns).")
 
         def tup(v):
@@ -392,8 +402,13 @@ class Song:
                 e.idle = raw_look.get("idle_level", e.idle)
                 e.slats = raw_look.get("slats_per_member", e.slats)
                 e.count = e.slats * n_mem if e.type == "bars" else n_mem
+        # before per-pattern elements: every pattern used the elements switched on for the project
+        old_on = [e.id for e in elements if e.visible]
         patterns = [Pattern(id=p["id"], name=p["name"], bars=p.get("bars", 1), color=tup(p.get("color", (255, 160, 40))),
-                            notes=[Note(**n) for n in p.get("notes", [])]) for p in d.get("patterns", [])]
+                            notes=[Note(**n) for n in p.get("notes", [])],
+                            elements=list(p["elements"]) if p.get("elements") is not None else
+                            (None if "elements" in p else list(old_on)))
+                    for p in d.get("patterns", [])]
         if d.get("version") == 2:   # member / group / All / motion lanes now live inside each element
             targets = [e.id for e in elements if e.visible] or [e.id for e in elements]
             for p in patterns:
@@ -440,6 +455,10 @@ def default_song() -> Song:
                       Note("fx:logo", 0, 32, 1.0), Note("fx:flash", 0, 1, 0.6)])
     build = Pattern(new_id(), "Build", 1, PATTERN_COLORS[3],
                     [Note(S("all"), 0, 16, 0.5), Note(B("chase"), 0, 12, 0.9), Note(B("strobe"), 12, 4, 0.8)])
+
+    intro.elements = [sun.id]                          # the intro is just the sun
+    for p in (groove, chorus, build):
+        p.elements = [beam.id, sun.id]
 
     clips = [
         Clip(new_id(), intro.id, 0, 0.0, 16.0),

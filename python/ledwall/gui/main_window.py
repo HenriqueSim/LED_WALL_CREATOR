@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self.ctl.changed.connect(self._on_changed)
         self.ctl.currentPatternChanged.connect(lambda *_: self._update_audition())
+        self.ctl.currentPatternChanged.connect(lambda *_: self.elements_tab.reload())
         self._update_title()
 
         self.timer = QTimer(self)
@@ -306,7 +307,7 @@ class MainWindow(QMainWindow):
         hit = None
         for el in song.elements:        # list top = front, so first hit wins
             bb = self.renderer.bboxes.get(el.id)
-            if el.visible and bb and bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]:
+            if bb and bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]:     # only drawn elements have a box
                 hit = el
                 break
         if hit is None:
@@ -524,6 +525,12 @@ class MainWindow(QMainWindow):
             self.renderer = FrameRenderer(pw, ph)
         eng, t = self.ctl.engine, self.current_t
         t_frame = self.free_clock.elapsed() / 1000.0 if (eng.preview_pulse and not self.playing) else t
+        if eng.preview_pulse:   # Elements tab: the selected pattern's elements, plus the one being edited
+            pat = self.ctl.current_pattern
+            ids = {e.id for e in self.ctl.song.pattern_elements(pat)} if pat else set()
+            if self.elements_tab.element is not None:
+                ids.add(self.elements_tab.element.id)
+            eng.preview_elements = ids
         st = eng.state_at(t_frame)
         in_export = self.tabs.currentWidget() is self.export_tab
         if in_export:

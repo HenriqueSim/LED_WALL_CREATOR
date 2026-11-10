@@ -168,7 +168,7 @@ class FrameRenderer:
         any_visible = False
         for el in reversed(song.elements):          # list top = front layer
             fn = drawers.get(el.type)
-            if not el.visible or fn is None:
+            if fn is None or el.id not in st.elements:      # not used by what is playing now
                 continue
             any_visible = True
             layer.fill(0)

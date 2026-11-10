@@ -55,7 +55,7 @@ class PatternGrid(QWidget):
 
     def lanes(self):
         """Visible rows (folders + the lanes of open folders): [(key, label, kind)]."""
-        return self.ctl.song.lane_rows(self.collapsed)
+        return self.ctl.song.lane_rows(self.pattern, self.collapsed)
 
     def edit_keys(self) -> list:
         return [k for k, _, kind in self.lanes() if kind != "folder"]
@@ -300,7 +300,7 @@ class PatternGrid(QWidget):
         if not (pat and _CLIPBOARD):
             return
         at = self.cursor_step if at is None else at
-        keys = {k for k, _, _ in self.ctl.song.lanes()}
+        keys = {k for k, _, _ in self.ctl.song.lanes(pat)}
         new = []
         for lane, rel, ln, vel in _CLIPBOARD:
             s = at + rel
@@ -561,6 +561,10 @@ class PatternTab(QWidget):
         self.spin_vel.valueChanged.connect(self._on_velocity)
         form.addRow("Velocity", self.spin_vel)
         ll.addLayout(form)
+        self.lbl_elements = QLabel()
+        self.lbl_elements.setObjectName("hint")
+        self.lbl_elements.setWordWrap(True)
+        ll.addWidget(self.lbl_elements)
         self.chk_loop = QCheckBox("Loop this section while editing")
         self.chk_loop.setChecked(True)
         self.chk_loop.setToolTip("Playback loops the master-track clip of this pattern (the one you opened, or the "
@@ -632,6 +636,17 @@ class PatternTab(QWidget):
         self.grid.selected = []
         self.grid.highlight_bar = None
         self.grid.refresh_size()
+        self._update_elements_label()
+
+    def _update_elements_label(self):
+        p = self.ctl.current_pattern
+        if not p:
+            self.lbl_elements.setText("")
+            return
+        names = [e.name for e in self.ctl.song.pattern_elements(p)]
+        self.lbl_elements.setText(("Elements in this pattern: " + ", ".join(names)) if names else
+                                  "This pattern uses no elements yet.")
+        self.lbl_elements.setToolTip("Choose which elements this pattern uses in the Elements tab")
 
     def _on_select(self, cur, _prev):
         if self._updating or cur is None:
@@ -659,6 +674,8 @@ class PatternTab(QWidget):
     def new_pattern(self):
         song = self.ctl.song
         p = Pattern(new_id(), f"Pattern {len(song.patterns) + 1}", 1, PATTERN_COLORS[len(song.patterns) % len(PATTERN_COLORS)])
+        cur = self.ctl.current_pattern       # a new pattern starts with the same elements as the current one
+        p.elements = list(cur.elements) if cur and cur.elements is not None else None
         song.patterns.append(p)
         self.ctl.current_pattern_id = p.id
         self.ctl.commit("patterns")
@@ -734,6 +751,7 @@ class PatternTab(QWidget):
             self.reload_list()
         elif kind == "elements":
             self.grid.refresh_size()
+            self._update_elements_label()
         elif kind == "pattern":
             self.grid.update()
         if kind == "all":

@@ -220,12 +220,15 @@ class ArrangementView(QWidget):
                        "No audio loaded (Look & Song tab → Load Audio)")
 
         # clips
-        lanes = [k for k, _, _ in song.lanes()]
         p.setFont(QFont("Sans", 8, QFont.Weight.Bold))
+        lane_cache: dict = {}
         for c in song.clips:
             pat = song.pattern(c.pattern_id)
             if not pat:
                 continue
+            if pat.id not in lane_cache:
+                lane_cache[pat.id] = [k for k, _, _ in song.lanes(pat)]
+            lanes = lane_cache[pat.id]
             r = self.clip_rect(c)
             if r.right() < self.HEADER_W or r.left() > w:
                 continue

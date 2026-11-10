@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .audio import AudioAnalysis
-from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, el_lane
+from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, el_lane, split_lane
 
 
 @dataclass
@@ -78,6 +78,7 @@ class MotionEngine:
         self.analysis = analysis
         self.audition_pattern: str | None = None   # pattern id looped instead of the master track
         self.preview_pulse = False                  # Elements tab: every element in the scene, pulsing
+        self.preview_elements: set | None = None    # ... these elements (the pattern being edited)
 
     # ---- time helpers ---------------------------------------------------------
     @property
@@ -153,6 +154,8 @@ class MotionEngine:
             plen = pat.beats
             local = b - origin
             for n in pat.notes:
+                if n.lane.startswith("e:") and pat.elements is not None and split_lane(n.lane)[0] not in pat.elements:
+                    continue        # the pattern doesn't use that element (its notes are kept, silent)
                 atk, rel, pdec = self._env_params(n.lane)
                 sb, lb = n.start / STEPS_PER_BEAT, n.length / STEPS_PER_BEAT
                 kmax = math.ceil((ce - origin - sb) / plen) - 1          # last occurrence starting inside
@@ -238,7 +241,17 @@ class MotionEngine:
         elements = {}
         all_lv = np.zeros(n_mem, np.float32)
         all_fl = np.zeros(n_mem, np.float32)
-        for el in song.active_elements():
+        if self.preview_pulse:
+            pe = self.preview_elements
+            in_scene = [e for e in song.elements if pe is None or e.id in pe]
+        else:   # the elements used by the patterns sounding now (incl. release tails)
+            used: set = set()
+            probes = (b, b + (loop[1] - loop[0])) if loop else (b,)     # loops wrap release tails around
+            for bb in probes:
+                for _cs, _ce, pat, _o in self._active_sources(bb, loop):
+                    used |= {e.id for e in song.pattern_elements(pat)}
+            in_scene = [e for e in song.elements if e.id in used]
+        for el in in_scene:
             def L(sub, idx=0, _e=el.id):
                 return lane(el_lane(_e, sub), idx)
             levels = np.zeros(n_mem, np.float32)

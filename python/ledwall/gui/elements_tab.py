@@ -111,6 +111,13 @@ class ElementsTab(QWidget):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(4, 4, 4, 4)
         ll.addWidget(QLabel("<b>Elements</b>  (top of list = front)"))
+        prow = QHBoxLayout()
+        prow.addWidget(QLabel("Pattern"))
+        self.combo_pattern = QComboBox()
+        self.combo_pattern.setToolTip("The ticked elements are the ones this pattern uses")
+        self.combo_pattern.currentIndexChanged.connect(self._on_pattern_combo)
+        prow.addWidget(self.combo_pattern, 1)
+        ll.addLayout(prow)
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self._on_select)
         self.list.itemChanged.connect(self._on_item_changed)
@@ -138,10 +145,10 @@ class ElementsTab(QWidget):
         self.chk_pulse.setToolTip("Unchecked: the preview shows the song at the playhead instead")
         self.chk_pulse.toggled.connect(self.previewModeChanged.emit)
         ll.addWidget(self.chk_pulse)
-        ll.addWidget(hint("Checked = available in this project: it gets its own folder of lanes in the Pattern "
-                          "Editor, where notes bring it in and out of the scene. Click an element (or the band "
-                          "name) in the preview to select it, drag to move, mouse wheel to resize. Double-click "
-                          "a name to rename."))
+        ll.addWidget(hint("Ticked = used in the selected pattern: it gets a folder of lanes in that pattern, "
+                          "where notes bring it in and out of the scene. The settings are shared: an element looks "
+                          "the same in every pattern that uses it. Click an element (or the band name) in the "
+                          "preview to select it, drag to move, wheel to resize. Double-click a name to rename."))
 
         # ---- properties --------------------------------------------------------------------
         props = QWidget()
@@ -269,6 +276,12 @@ class ElementsTab(QWidget):
     def add(self, kind: str):
         el = preset_element(kind)
         self.ctl.song.elements.insert(0, el)
+        pat = self.ctl.current_pattern          # new elements go into the selected pattern only
+        for p in self.ctl.song.patterns:
+            if p.elements is None:
+                p.elements = [e.id for e in self.ctl.song.elements if e.id != el.id]
+        if pat is not None:
+            pat.elements.append(el.id)
         self.selected_id = el.id
         self._commit()
 
@@ -281,9 +294,11 @@ class ElementsTab(QWidget):
         el.x = min(1.0, el.x + 0.05)
         els = self.ctl.song.elements
         els.insert(els.index(src), el)
-        for p in self.ctl.song.patterns:      # the copy starts with the same lanes / notes
+        for p in self.ctl.song.patterns:      # the copy starts with the same lanes / notes, in the same patterns
             p.notes += [type(n)(n.lane.replace(f"e:{src.id}|", f"e:{el.id}|", 1), n.start, n.length, n.velocity)
                         for n in p.notes if n.lane.startswith(f"e:{src.id}|")]
+            if p.elements is not None and src.id in p.elements:
+                p.elements.append(el.id)
         self.selected_id = el.id
         self._commit()
 
@@ -333,6 +348,13 @@ class ElementsTab(QWidget):
             self.selected_id = None
         if not self.selected_id:
             self.selected_id = els[0].id if els else LOGO_ID
+        pat = self.ctl.current_pattern
+        self.combo_pattern.blockSignals(True)
+        self.combo_pattern.clear()
+        for p in self.ctl.song.patterns:
+            self.combo_pattern.addItem(p.name, p.id)
+        self.combo_pattern.setCurrentIndex(max(0, self.combo_pattern.findData(pat.id if pat else None)))
+        self.combo_pattern.blockSignals(False)
         it = QListWidgetItem("★ Band name")
         it.setData(Qt.ItemDataRole.UserRole, LOGO_ID)
         it.setToolTip("The band name layer: text, font, layout and timing")
@@ -348,7 +370,10 @@ class ElementsTab(QWidget):
             it.setData(Qt.ItemDataRole.UserRole, el.id)
             it.setToolTip(ELEMENT_LABELS.get(el.type, el.type))
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(Qt.CheckState.Checked if el.visible else Qt.CheckState.Unchecked)
+            used = pat is not None and pat.uses(el.id)
+            it.setCheckState(Qt.CheckState.Checked if used else Qt.CheckState.Unchecked)
+            if not used:
+                it.setForeground(QColor(130, 130, 130))
             self.list.addItem(it)
             if el.id == self.selected_id:
                 self.list.setCurrentItem(it)
@@ -369,12 +394,20 @@ class ElementsTab(QWidget):
         el = self.ctl.song.element(it.data(Qt.ItemDataRole.UserRole))
         if not el:
             return
-        vis = it.checkState() == Qt.CheckState.Checked
+        use = it.checkState() == Qt.CheckState.Checked
         name = it.text().strip()
-        if vis != el.visible or (name and name != el.name):
-            el.visible = vis
-            if name:
-                el.name = name
+        pat = self.ctl.current_pattern
+        if pat is not None and use != pat.uses(el.id):
+            if pat.elements is None:
+                pat.elements = [e.id for e in self.ctl.song.elements]
+            if use:
+                pat.elements.append(el.id)
+            else:
+                pat.elements.remove(el.id)
+            self._commit()
+            return
+        if name and name != el.name:
+            el.name = name
             self._commit()
 
     # ---- property panel ---------------------------------------------------------------------
@@ -440,6 +473,11 @@ class ElementsTab(QWidget):
             self.lbl_parts.setText(share)
         self._updating = False
         self._load_shapes(el if has and el.type == "custom" else None)
+
+    def _on_pattern_combo(self, i):
+        pid = self.combo_pattern.itemData(i)
+        if pid and pid != self.ctl.current_pattern_id:
+            self.ctl.set_current_pattern(pid)
 
     # ---- custom element shapes ----------------------------------------------------------------
     def _load_shapes(self, el):
@@ -557,7 +595,7 @@ class ElementsTab(QWidget):
         self._commit()
 
     def _on_changed(self, kind):
-        if kind in ("all", "elements", "band"):
+        if kind in ("all", "elements", "band", "patterns"):
             self.reload()
         if kind in ("all", "look") and self.logo_selected:
             self.band_panel.reload()

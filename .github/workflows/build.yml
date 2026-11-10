@@ -55,7 +55,7 @@ jobs:
         run: |
           $p = Start-Process -FilePath "dist/LEDWallCreator/LEDWallCreator.exe" -ArgumentList "--selftest","--selftest-log=selftest.log" -Wait -PassThru
           Get-Content selftest.log
-          if ($p.ExitCode -ne 0) { exit 1 }
+          if ($p.ExitCode -ne 0) { Get-Content selftest.log -Tail 25 | ForEach-Object { Write-Output "::error::$_" }; exit 1 }
 
       - name: Self-test (macOS)
         if: runner.os == 'macOS'
@@ -64,6 +64,7 @@ jobs:
           dist/LEDWallCreator.app/Contents/MacOS/LEDWallCreator --selftest --selftest-log=selftest.log
           code=$?
           cat selftest.log
+          if [ $code -ne 0 ]; then tail -n 25 selftest.log | while IFS= read -r l; do echo "::error::$l"; done; fi
           exit $code
 
       - name: Self-test (Linux)
@@ -73,6 +74,7 @@ jobs:
           dist/LEDWallCreator/LEDWallCreator --selftest --selftest-log=selftest.log
           code=$?
           cat selftest.log
+          if [ $code -ne 0 ]; then tail -n 25 selftest.log | while IFS= read -r l; do echo "::error::$l"; done; fi
           exit $code
 
       - name: Package

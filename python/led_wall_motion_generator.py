@@ -148,8 +148,13 @@ def selftest() -> int:
             info = updater.fetch_latest()
             print(f"update check: latest {info['version']} ({info['asset_name']})")
         except Exception as exc:
-            print("update check failed:", exc)
-            if os.environ.get("CI"):
+            import ssl
+            import urllib.error
+            print("update check failed:", repr(exc))
+            # GitHub answering at all (e.g. 403 rate limit on shared CI machines) means HTTPS works;
+            # only certificate / TLS problems are build bugs
+            reason = getattr(exc, "reason", exc)
+            if os.environ.get("CI") and not isinstance(exc, urllib.error.HTTPError) and isinstance(reason, ssl.SSLError):
                 raise
         print("SELFTEST OK")
         return 0

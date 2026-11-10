@@ -155,14 +155,14 @@ Everything is included, ffmpeg too. Keep the files inside the unzipped folder to
 download is big (a few hundred MB) because it carries its own copies of Python, Qt, OpenCV and
 the audio analysis libraries.
 
-**Updates:** from v0.3.0 on, the app checks for a new version when it starts (it takes a second
+**Updates:** from v0.3.1 on, the app checks for a new version when it starts (it takes a second
 and stays quiet when you're offline) and offers to install it: *Install update* downloads it,
 puts it next to the current one as `LEDWallCreator <version>`, restarts into it and removes the
 old version. Your projects are safe: they live in their own folders, and anything you saved
 inside the app's folder is moved into the new version before the old one is removed (if a file
 can't be moved, the old version is kept). *Help → Check for Updates* checks by hand; untick
 *Check for updates when the app starts* in that dialog to turn the automatic check off. Versions
-up to v0.2.0 don't have this yet: download v0.3.0 by hand once.
+up to v0.2.0 don't have this yet: download v0.3.1 by hand once.
 
 ### Option 2: run it from the source (any computer with Python)
 

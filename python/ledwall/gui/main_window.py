@@ -6,12 +6,14 @@ import json
 import math
 import os
 
-from PyQt6.QtCore import QElapsedTimer, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QFont, QKeySequence, QShortcut
+from PyQt6.QtCore import QElapsedTimer, QSettings, Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QFont, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from .. import project as proj
+from .. import updater
 from ..audio import AudioAnalysisWorker
 from ..controller import SongController
 from ..engine import bar_of
@@ -27,6 +29,9 @@ from .stage_window import StageWindow
 from ..stage import StageSimulator
 from .look_tab import LookTab
 from .pattern_editor import PatternTab
+from .project_dialog import ProjectDialog
+from .update_dialog import UpdateChecker, UpdateDialog, should_auto_check, skipped
+from ..version import __version__
 
 try:
     from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -70,6 +75,9 @@ class MainWindow(QMainWindow):
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self._tick)
         self.timer.start(16)
+        self.update_checker = None
+        if updater.current_install() and should_auto_check():
+            QTimer.singleShot(2500, lambda: self.check_updates(manual=False))
 
     # ---- UI ----------------------------------------------------------------------------
     def _build_ui(self):
@@ -165,10 +173,13 @@ class MainWindow(QMainWindow):
             a.triggered.connect(fn)
             menu.addAction(a)
             return a
-        act(m_file, "New Song", self.new_song, "Ctrl+N")
-        act(m_file, "Open Project…", self.open_project, "Ctrl+O")
-        act(m_file, "Save Project", self.save_project, "Ctrl+S")
+        act(m_file, "New Project…", self.new_song, "Ctrl+N")
+        act(m_file, "Open Project…", lambda: self.open_project(), "Ctrl+O")
+        self.m_recent = m_file.addMenu("Open Recent")
+        self.m_recent.aboutToShow.connect(self._fill_recent)
+        act(m_file, "Save Project", lambda: self.save_project(), "Ctrl+S")
         act(m_file, "Save Project As…", lambda: self.save_project(ask=True), "Ctrl+Shift+S")
+        act(m_file, "Show Project Folder", self.show_project_folder)
         m_file.addSeparator()
         act(m_file, "Load Audio…", self.load_audio_dialog)
         act(m_file, "Render Video…", self.render_video, "Ctrl+R")
@@ -178,6 +189,9 @@ class MainWindow(QMainWindow):
         self.act_undo = act(m_edit, "Undo", self.ctl.undo, "Ctrl+Z")
         self.act_redo = act(m_edit, "Redo", self.ctl.redo, "Ctrl+Shift+Z")
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.ctl.redo)
+        m_help = mb.addMenu("&Help")
+        act(m_help, "Check for Updates…", lambda: self.check_updates(manual=True))
+        act(m_help, "About", self.show_about)
 
     # ---- change handling ------------------------------------------------------------------
     def _on_changed(self, kind):
@@ -385,7 +399,15 @@ class MainWindow(QMainWindow):
 
     def _on_audio_loaded(self, a):
         self.look_tab.set_loading(None)
-        self.ctl.song.audio_path = a.path
+        path = a.path
+        if (self._set_tempo_on_load and proj.media_dir(self.ctl.project_path)
+                and QSettings().value("project/copy_media", True, type=bool)):
+            try:                    # a project with a Media folder keeps its own copy of the audio
+                path = proj.copy_into_media(path, self.ctl.project_path)
+                a.path = path
+            except OSError as exc:
+                self.statusBar().showMessage(f"Couldn't copy the audio into Media: {exc}", 8000)
+        self.ctl.song.audio_path = path
         if self._set_tempo_on_load:
             self.ctl.song.bpm = a.bpm
             self.ctl.song.beat_offset = a.detected_offset
@@ -587,6 +609,9 @@ class MainWindow(QMainWindow):
     def new_song(self):
         if not self._confirm_discard():
             return
+        dlg = ProjectDialog(self, "New project", "My song", ok_text="Create")
+        if not dlg.exec():
+            return
         self.pause()
         self.ctl.project_path = None
         self.ctl.set_analysis(None)
@@ -594,18 +619,46 @@ class MainWindow(QMainWindow):
             self.player.setSource(QUrl())
         self.ctl.set_song(default_song())
         self.seek(0.0)
-        self._update_title()
+        self._write_project(dlg.path)
+
+    def _project_dialog_defaults(self):
+        """(name, location) for the Save dialog, from the current project."""
+        p = self.ctl.project_path
+        if not p:
+            return "My song", None
+        name = os.path.splitext(os.path.basename(p))[0]
+        if name.endswith(".ledwall"):
+            name = name[:-8]
+        folder = os.path.dirname(os.path.abspath(p))
+        in_own_folder = os.path.basename(folder) == name
+        return name, os.path.dirname(folder) if in_own_folder else folder
 
     def save_project(self, ask: bool = False) -> bool:
         path = self.ctl.project_path
-        if ask or not path:
-            path, _ = QFileDialog.getSaveFileName(self, "Save project", path or "song.ledwall.json", "LED wall project (*.json)")
-            if not path:
+        # old .json projects are saved as a new .ledwall project (the .json is left as it was)
+        if ask or not path or not path.lower().endswith(proj.EXT):
+            name, loc = self._project_dialog_defaults()
+            audio = self.ctl.song.audio_path
+            dlg = ProjectDialog(self, "Save project", name, loc, has_audio=bool(audio and os.path.isfile(audio)))
+            if not dlg.exec():
                 return False
-        with open(path, "w") as fh:
-            json.dump(self.ctl.song.to_dict(), fh, indent=1)
+            path = dlg.path
+            if dlg.copy_media and audio and os.path.isfile(audio):
+                try:
+                    self.ctl.song.audio_path = proj.copy_into_media(audio, path)
+                except OSError as exc:
+                    QMessageBox.warning(self, "Audio", f"Couldn't copy the audio into the Media folder:\n{exc}")
+        return self._write_project(path)
+
+    def _write_project(self, path: str) -> bool:
+        try:
+            proj.save(self.ctl.song, path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return False
         self.ctl.project_path = path
         self.ctl.dirty = False
+        self._add_recent(path)
         self._update_title()
         self.statusBar().showMessage(f"Saved {path}", 4000)
         return True
@@ -614,32 +667,93 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         if not path:
-            path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "LED wall project (*.json)")
+            start = os.path.dirname(self.ctl.project_path) if self.ctl.project_path else \
+                QSettings().value("project/location", proj.default_location())
+            path, _ = QFileDialog.getOpenFileName(self, "Open project", start, proj.OPEN_FILTER)
             if not path:
                 return
         try:
-            with open(path) as fh:
-                song = Song.from_dict(json.load(fh))
+            song = proj.load(path)
         except Exception as exc:
-            QMessageBox.critical(self, "Open failed", str(exc))
+            QMessageBox.critical(self, "Open failed", f"{path}\n\n{exc}")
             return
         self.pause()
         self.ctl.set_analysis(None)
+        if self.player:
+            self.player.setSource(QUrl())
         self.ctl.set_song(song)
         self.ctl.project_path = path
+        self._add_recent(path)
         self._update_title()
         if song.audio_path and os.path.exists(song.audio_path):
             self.load_audio(song.audio_path, set_tempo=False)
         elif song.audio_path:
-            QMessageBox.warning(self, "Audio missing", f"Audio file not found:\n{song.audio_path}")
+            QMessageBox.warning(self, "Audio missing", f"Audio file not found:\n{song.audio_path}\n\n"
+                                "Put it in the project's Media folder, or load it again with File → Load Audio.")
         self.seek(0.0)
+
+    # ---- recent projects ------------------------------------------------------------------------
+    def _recent(self) -> list:
+        v = QSettings().value("recent_projects", [])
+        return [p for p in (v if isinstance(v, list) else [v] if v else []) if p]
+
+    def _add_recent(self, path: str):
+        path = os.path.abspath(path)
+        lst = [path] + [p for p in self._recent() if p != path]
+        QSettings().setValue("recent_projects", lst[:10])
+
+    def _fill_recent(self):
+        self.m_recent.clear()
+        items = [p for p in self._recent() if os.path.exists(p)]
+        for p in items:
+            a = self.m_recent.addAction(f"{os.path.splitext(os.path.basename(p))[0]}   —   {os.path.dirname(p)}")
+            a.triggered.connect(lambda _=False, p=p: self.open_project(p))
+        if not items:
+            self.m_recent.addAction("(none yet)").setEnabled(False)
+
+    def show_project_folder(self):
+        p = self.ctl.project_path
+        folder = os.path.dirname(os.path.abspath(p)) if p else QSettings().value("project/location", proj.default_location())
+        os.makedirs(folder, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+    # ---- updates ---------------------------------------------------------------------------------
+    def check_updates(self, manual: bool):
+        if self.update_checker and self.update_checker.isRunning():
+            return
+        self.update_checker = UpdateChecker(self)
+        self.update_checker.found.connect(lambda info: self._update_found(info, manual))
+        if manual:
+            self.update_checker.none.connect(lambda: QMessageBox.information(
+                self, "Updates", f"You have the latest version ({__version__})."))
+            self.update_checker.failed.connect(lambda m: QMessageBox.warning(
+                self, "Updates", f"Couldn't check for updates (are you online?).\n\n{m}"))
+        self.update_checker.start()
+
+    def _update_found(self, info: dict, manual: bool):
+        if not manual and skipped(info["version"]):
+            return
+        UpdateDialog(info, before_install=self._confirm_discard, quit_app=self._quit_for_update,
+                     open_project=lambda: self.ctl.project_path, parent=self).exec()
+
+    def _quit_for_update(self):
+        self.ctl.dirty = False          # already saved or discarded in before_install
+        self.close()
+
+    def show_about(self):
+        QMessageBox.about(self, "About", f"<b>LED Wall Creator</b> {__version__}<br><br>"
+                          "Audio-synced LED wall loops for live shows.<br>"
+                          f'<a href="https://github.com/{updater.GITHUB_REPO}">github.com/{updater.GITHUB_REPO}</a>')
 
     # ---- export --------------------------------------------------------------------------------------
     def render_video(self):
         if self.export_worker and self.export_worker.isRunning():
             self.export_worker.cancel()
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Render video", "ledwall_loop.mp4", "MP4 video (*.mp4)")
+        p = self.ctl.project_path
+        default = (os.path.join(os.path.dirname(os.path.abspath(p)), os.path.splitext(os.path.basename(p))[0] + ".mp4")
+                   if p else "ledwall_loop.mp4")
+        path, _ = QFileDialog.getSaveFileName(self, "Render video", default, "MP4 video (*.mp4)")
         if not path:
             return
         if not path.lower().endswith(".mp4"):

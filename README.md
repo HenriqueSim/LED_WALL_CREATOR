@@ -11,6 +11,26 @@ the song's waveform, and render the result to an `.mp4` for the LED wall (3840×
 
 ## How to use the editor
 
+### Projects
+
+**File → New Project** asks for a name and where to keep it (by default *Documents/LED Wall
+Creator*), and can create a folder for the project, like Reaper does:
+
+```
+Gig 2026/
+  Gig 2026.ledwall      the project
+  Media/                the song's audio, copied in when you load it
+  Backups/              the previous version on every save (the newest 20 are kept)
+```
+
+The audio is stored relative to the project, so you can copy the whole folder to a USB stick or
+another computer and it opens with its audio. Double-click a `.ledwall` file to open it in the
+app (packaged app). A backup opens like any project. Projects from older versions (`.json`)
+still open: *Save* then asks where to store them as a `.ledwall` project and leaves the `.json`
+untouched. **File → Open Recent** and **Show Project Folder** are in the File menu too.
+
+### The editor
+
 The window has a live **preview** on top (Space = play / pause, Home = back to the start) and six
 tabs below. A typical song goes through them in this order:
 
@@ -114,7 +134,7 @@ tabs below. A typical song goes through them in this order:
    The video covers the loop region if there is one, otherwise the whole song. With ffmpeg
    installed you get a high-bitrate H.264 file and can include the song's audio.
 
-Save the project with **File → Save Project** (`.json`). Undo / redo is Ctrl+Z / Ctrl+Shift+Z.
+Save with **File → Save Project** (Ctrl+S). Undo / redo is Ctrl+Z / Ctrl+Shift+Z.
 
 ## Install
 
@@ -133,6 +153,15 @@ Everything is included, ffmpeg too. Keep the files inside the unzipped folder to
 download is big (a few hundred MB) because it carries its own copies of Python, Qt, OpenCV and
 the audio analysis libraries.
 
+**Updates:** from v0.3.0 on, the app checks for a new version when it starts (it takes a second
+and stays quiet when you're offline) and offers to install it: *Install update* downloads it,
+puts it next to the current one as `LEDWallCreator <version>`, restarts into it and removes the
+old version. Your projects are safe: they live in their own folders, and anything you saved
+inside the app's folder is moved into the new version before the old one is removed (if a file
+can't be moved, the old version is kept). *Help → Check for Updates* checks by hand; untick
+*Check for updates when the app starts* in that dialog to turn the automatic check off. Versions
+up to v0.2.0 don't have this yet: download v0.3.0 by hand once.
+
 ### Option 2: run it from the source (any computer with Python)
 
 1. Install **Python 3.10 or newer** from [python.org](https://www.python.org/downloads/).
@@ -145,8 +174,8 @@ the audio analysis libraries.
      right-click it → Open With → Terminal)
 
 The first start takes a few minutes while it sets up a private Python environment inside the
-folder and downloads the libraries. After that it starts in seconds. To update, download the new
-code and run the script again.
+folder and downloads the libraries. After that it starts in seconds. To update, run `git pull`
+(or download the new code) and run the script again.
 
 Doing it by hand instead:
 
@@ -155,7 +184,7 @@ cd python
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python led_wall_motion_generator.py            # or: ... my_song.json / ... my_song.wav
+python led_wall_motion_generator.py            # or: ... my_song.ledwall / ... my_song.wav
 ```
 
 ### Making a release (maintainers)
@@ -169,6 +198,9 @@ video):
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
+The build writes the tag's number into `ledwall/version.py`, which is what the in-app update
+check compares with the newest release. The release notes are shown in the update dialog.
 
 To build one locally: `pip install pyinstaller`, then `pyinstaller LEDWallCreator.spec` inside
 `python/`. The app ends up in `python/dist/`. Run it with `--selftest` to check it.
@@ -187,7 +219,11 @@ python/
     engine.py      time -> frame state: evaluates clips / notes, envelopes, per-element levels
     renderer.py    frame state -> image: element drawing, bloom, band name, lyrics (OpenCV)
     stage.py       stage simulation (band, audience, LED wall / projector lighting)
-    resources.py   bundled files (fonts) for source and packaged runs
+    resources.py   bundled files (fonts, icons) for source and packaged runs
+    project.py     project folders (.ledwall, Media, Backups), saving and loading
+    updater.py     update check, download, install and removal of the old version
+    file_assoc.py  opens .ledwall files with the app (Windows / Linux; macOS via the spec)
+    version.py     the app version (set from the tag by the release build)
     export.py      video export thread (OpenCV VideoWriter / ffmpeg)
     controller.py  undo / redo and change notifications
     gui/           one module per tab + the main window

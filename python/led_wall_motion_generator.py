@@ -13,7 +13,7 @@
 #    # encode and audio muxing on export):
 #    #   Linux:   sudo apt install ffmpeg      macOS: brew install ffmpeg
 #
-#    python led_wall_motion_generator.py [project.json | audio file]
+#    python led_wall_motion_generator.py [project.ledwall | audio file]
 #  ---------------------------------------------------------------------------
 #
 #  Workflow (full guide in README.md)
@@ -44,7 +44,37 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+from PyQt6.QtCore import QEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
+
+ORG = "LEDWallCreator"
+PROJECT_EXTS = (".ledwall", ".json")
+
+
+class App(QApplication):
+    """Also receives macOS "open this file" events (double-clicked .ledwall files)."""
+
+    def __init__(self, argv):
+        super().__init__(argv)
+        self.window = None
+        self.pending: list = []
+
+    def event(self, ev):
+        if ev.type() == QEvent.Type.FileOpen:
+            path = ev.file()
+            if self.window is not None:
+                open_path(self.window, path)
+            else:
+                self.pending.append(path)
+            return True
+        return super().event(ev)
+
+
+def open_path(win, path: str):
+    if path.lower().endswith(PROJECT_EXTS):
+        win.open_project(path)
+    else:
+        win.load_audio(path, set_tempo=True)
 
 
 def selftest() -> int:
@@ -54,6 +84,7 @@ def selftest() -> int:
     import traceback
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     app = QApplication(sys.argv)
+    app.setOrganizationName(ORG + "-selftest")
     try:
         import numpy as np
         import soundfile as sf
@@ -98,6 +129,28 @@ def selftest() -> int:
         print(f"export: {size} bytes")
         if size < 1000:
             raise RuntimeError("export produced no video")
+        # project folder: save (with backup) and load back, audio stored relative to the project
+        from ledwall import project as proj
+        from ledwall.version import __version__
+        print("version:", __version__)
+        pf = proj.project_path_for(tmp, "Self test", True)
+        proj.create_folders(pf, True)
+        song.audio_path = proj.copy_into_media(wav, pf)
+        proj.save(song, pf)
+        proj.save(song, pf)
+        back = proj.load(pf)
+        if not (back.audio_path and os.path.isfile(back.audio_path) and os.listdir(os.path.join(tmp, "Self test", "Backups"))):
+            raise RuntimeError("project save / load failed")
+        print("project:", pf)
+        # update check over HTTPS (catches missing certificates in the packaged app); required on CI only
+        from ledwall import updater
+        try:
+            info = updater.fetch_latest()
+            print(f"update check: latest {info['version']} ({info['asset_name']})")
+        except Exception as exc:
+            print("update check failed:", exc)
+            if os.environ.get("CI"):
+                raise
         print("SELFTEST OK")
         return 0
     except Exception:
@@ -113,7 +166,17 @@ def main():
         if log:
             sys.stdout = sys.stderr = open(log, "w", buffering=1)
         sys.exit(selftest())
-    app = QApplication(sys.argv)
+    args = sys.argv[1:]
+    finish = None
+    if "--finish-update" in args:            # started by the previous version after an update
+        i = args.index("--finish-update")
+        try:
+            finish = (args[i + 1], int(args[i + 2]))
+        except (IndexError, ValueError):
+            pass
+        del args[i:i + 3]
+    app = App(sys.argv[:1] + args)
+    app.setOrganizationName(ORG)
     app.setApplicationName("LED Wall Motion Generator")
     app.setStyle("Fusion")
     from ledwall.resources import load_bundled_fonts
@@ -122,14 +185,22 @@ def main():
     from ledwall.gui.common import DARK_QSS
     from ledwall.gui.main_window import MainWindow
     app.setStyleSheet(DARK_QSS)
+    from ledwall.resources import set_app_icon
+    set_app_icon(app)
     win = MainWindow()
+    app.window = win
     win.show()
-    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
-        arg = sys.argv[1]
-        if arg.lower().endswith(".json"):
-            win.open_project(arg)
-        else:
-            win.load_audio(arg, set_tempo=True)
+    files = [a for a in args if not a.startswith("-") and os.path.exists(a)] + app.pending
+    if files:
+        open_path(win, files[0])
+    if getattr(sys, "frozen", False):
+        from ledwall.file_assoc import register
+        register()
+    if finish:
+        from ledwall.gui.update_dialog import FinishUpdateWorker, report_finished_update
+        worker = FinishUpdateWorker(*finish, parent=win)
+        worker.finished_with.connect(lambda r: report_finished_update(win, r))
+        worker.start()
     sys.exit(app.exec())
 
 

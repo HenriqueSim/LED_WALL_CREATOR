@@ -7,7 +7,7 @@
 #  Setup:
 #  ---------------------------------------------------------------------------
 #    python3 -m venv .venv && source .venv/bin/activate
-#    pip install PyQt6 opencv-python numpy librosa soundfile
+#    pip install -r requirements.txt   (PyQt6 opencv-python numpy librosa soundfile)
 #
 #    # Optional but recommended (MP4/M4A audio import, H.264 high-bitrate
 #    # encode and audio muxing on export):
@@ -16,16 +16,15 @@
 #    python led_wall_motion_generator.py [project.json | audio file]
 #  ---------------------------------------------------------------------------
 #
-#  Workflow
-#    Band tab           members (left -> right on stage) and groups
-#    Pattern Editor     drum-machine grid: one row per member, per group and per
-#                       FX lane (Pulse, Chase, Random, Sparkle, Strobe, Flash
-#                       Peak, Blackout, Band Name). Notes = when it is lit,
-#                       velocity = how bright.
-#    Master Track       place / copy / stretch pattern clips over the song
-#                       waveform on 3 tracks; lyrics lane for the top band.
-#    Look & Song        one colour per song, background design, band name layer.
-#    Export             3840x1080 / 1920x1080 / custom, 30/60 fps, seamless loop.
+#  Workflow (full guide in README.md)
+#    Look & Song        audio, BPM, one colour per song, band name layer
+#    Band               members (left -> right on stage) and groups
+#    Elements           the shapes on the wall (sun, beam, hexagon, bars...)
+#    Pattern Editor     one folder of lanes per element (All, members, groups,
+#                       Pulse / Chase / Random / Strobe) + global lanes; notes
+#                       bring elements in and out of the scene
+#    Master Track       place / copy / stretch pattern clips over the waveform
+#    Export             3840x1080 / 1920x1080 / custom, 30/60 fps, seamless loop
 #
 #  Package layout (ledwall/):
 #    model.py       song data (members, groups, patterns, clips, lyrics, look)

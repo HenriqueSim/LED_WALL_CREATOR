@@ -1,3 +1,5 @@
+<img src="python/icons/app.png" width="120" align="right" alt="LED Wall Creator logo">
+
 # LED Wall Creator
 
 A free desktop editor (Windows, macOS, Linux) for programming LED wall backgrounds for live shows,
@@ -213,6 +215,7 @@ python/
   LEDWallCreator.spec            PyInstaller recipe for the standalone app
   requirements.txt
   fonts/                         bundled fonts (SIL Open Font License)
+  icons/                         app icon (logo_source.png -> app.png / .ico / .icns via tools/make_icons.py)
   ledwall/
     model.py       song data: members, groups, elements, patterns, clips, lyrics, look
     audio.py       audio decoding + librosa analysis (BPM, beats, energy) in a thread

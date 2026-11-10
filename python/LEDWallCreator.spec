@@ -12,8 +12,9 @@ ICON = {"win32": "icons/app.ico", "darwin": "icons/app.icns"}.get(sys.platform, 
 ICON = ICON if os.path.isfile(ICON) else None
 
 datas = [("fonts", "fonts")]
-if os.path.isdir("icons"):
-    datas.append(("icons", "icons"))
+for f in ("app.png", "app.ico"):                  # window icon / .ledwall file icon (not the big source image)
+    if os.path.isfile(os.path.join("icons", f)):
+        datas.append((os.path.join("icons", f), "icons"))
 datas += collect_data_files("librosa")            # includes the .pyi stubs librosa's lazy loader needs
 datas += collect_data_files("imageio_ffmpeg")     # bundled ffmpeg binary
 hidden = collect_submodules("librosa") + ["soundfile", "imageio_ffmpeg", "certifi"]

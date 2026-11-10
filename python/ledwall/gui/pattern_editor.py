@@ -24,6 +24,7 @@ _CLIPBOARD: list = []   # [(lane, rel_start, length, velocity)]
 class PatternGrid(QWidget):
     selectionChanged = pyqtSignal()
     viewChanged = pyqtSignal()
+    seekStep = pyqtSignal(float)    # click / drag on the ruler: move the playhead to this step
 
     HEADER_W = 175
     ROW_H = 24
@@ -225,6 +226,9 @@ class PatternGrid(QWidget):
             p.setPen(QPen(QColor(255, 255, 255, 180), 1, Qt.PenStyle.DashLine))
             p.drawRect(self._drag["rect"])
 
+        # ruler: clickable to move the playhead
+        p.fillRect(QRectF(self.HEADER_W, 0, w - self.HEADER_W, self.RULER_H), QColor(255, 255, 255, 8))
+
         # cursor + playhead
         xc = self.x_of(self.cursor_step)
         p.setPen(QPen(QColor(255, 160, 40, 120), 1, Qt.PenStyle.DashLine))
@@ -260,6 +264,14 @@ class PatternGrid(QWidget):
             p.setPen(QColor(120, 120, 120))
             p.drawText(QRectF(self.HEADER_W, 0, w - self.HEADER_W, h), Qt.AlignmentFlag.AlignCenter, "Create a pattern on the left")
         p.end()
+
+    def _emit_seek(self, x: float):
+        pat = self.pattern
+        if pat:
+            step = min(max(0.0, self.step_at(x)), pat.steps - 1e-3)
+            self.playhead_step = step
+            self.seekStep.emit(step)
+            self.update()
 
     # ---- editing helpers ------------------------------------------------------------------------
     def _snapped(self, stepf: float) -> int:
@@ -322,6 +334,9 @@ class PatternGrid(QWidget):
         pat = self.pattern
         pos = ev.position()
         if pos.y() < self.RULER_H:
+            if pat and pos.x() >= self.HEADER_W and ev.button() == Qt.MouseButton.LeftButton:
+                self._drag = dict(mode="seek")
+                self._emit_seek(pos.x())
             return
         lanes = self.lanes()
         li = self.lane_at(pos.y())
@@ -390,6 +405,8 @@ class PatternGrid(QWidget):
         if not self._drag:
             note = self.note_at(pos)
             cursor = Qt.CursorShape.ArrowCursor
+            if pos.y() < self.RULER_H and pos.x() >= self.HEADER_W:
+                cursor = Qt.CursorShape.PointingHandCursor
             if note:
                 keys = [k for k, _, _ in self.lanes()]
                 rect = self.note_rect(note, keys.index(note.lane))
@@ -398,6 +415,9 @@ class PatternGrid(QWidget):
             return
         d = self._drag
         stepf = self.step_at(pos.x())
+        if d["mode"] == "seek":
+            self._emit_seek(pos.x())
+            return
         if d["mode"] == "draw":
             n = d["note"]
             end = max(d["start"] + self.snap, int(math.ceil(stepf / self.snap) * self.snap))
@@ -558,7 +578,8 @@ class PatternTab(QWidget):
         ll.addWidget(btn_fit)
         ll.addWidget(hint("Drag on empty cells to draw · drag a note to move · drag its right edge to resize · "
                           "right-click / double-click deletes · Shift-drag selects · Ctrl+C / X / V / D · "
-                          "arrows nudge · Ctrl+wheel zooms · Ctrl+Z undo · click a folder row to fold it"))
+                          "arrows nudge · Ctrl+wheel zooms · Ctrl+Z undo · click a folder row to fold it · "
+                          "click / drag the ruler (bar numbers) to move the playhead"))
 
         self.grid = PatternGrid(ctl)
         self.grid.selectionChanged.connect(self._on_grid_selection)

@@ -60,6 +60,7 @@ tabs below. A typical song goes through them in this order:
    | Nudge | arrow keys |
    | Zoom | Ctrl+wheel |
    | Fold a folder | click its row |
+   | Move the playhead | click or drag the ruler (bar numbers) |
 
 5. **Master Track: arrange the song.** Place patterns as clips on three tracks over the
    waveform: double-click a track (or *Place pattern at playhead*). Drag a clip to move it

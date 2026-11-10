@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self._el_drag = None
 
         self.pattern_tab.loopSectionChanged.connect(lambda *_: self._update_audition())
+        self.pattern_tab.grid.seekStep.connect(self._seek_pattern_step)
         self._section_clip_id = None   # master-track clip opened in the pattern editor
         self.section = None            # (t0, t1) looped while the pattern editor is open
         self.free_clock = QElapsedTimer()
@@ -192,6 +193,31 @@ class MainWindow(QMainWindow):
                 or next((c for c in clips if c.start <= b < c.start + c.length), None) or clips[0])
         self._section_clip_id = clip.id
         return clip
+
+    def _seek_pattern_step(self, step: float):
+        """Ruler click in the pattern editor: jump to that step of the pattern, in the repetition of
+        the pattern the playhead is in now (inside the looped section / clip)."""
+        pat = self.ctl.current_pattern
+        if not pat:
+            return
+        eng = self.ctl.engine
+        b = eng.t2b(self.current_t)
+        pb = step / STEPS_PER_BEAT
+        if eng.audition_pattern == pat.id:
+            target = math.floor(b / pat.beats) * pat.beats + pb
+        else:
+            clip = self._pattern_section() if self.section is not None else None
+            if clip is None:
+                clip = next((c for c in self.ctl.song.clips if c.pattern_id == pat.id and c.start <= b < c.start + c.length),
+                            None) or next((c for c in sorted(self.ctl.song.clips, key=lambda c: c.start)
+                                           if c.pattern_id == pat.id), None)
+            if clip is None:
+                return
+            rep = math.floor((b - clip.start) / pat.beats) if clip.start <= b < clip.start + clip.length else 0
+            target = clip.start + rep * pat.beats + pb
+            if target >= clip.start + clip.length:       # last repetition is cut short by the clip end
+                target = clip.start + pb
+        self.seek(eng.b2t(target))
 
     def _update_audition(self):
         eng = self.ctl.engine

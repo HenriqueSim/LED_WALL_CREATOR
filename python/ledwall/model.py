@@ -151,6 +151,7 @@ class Element:
     gap: float = 0.28            # bars: gap between bars (x bar width)
     lines: int = 1               # beam: parallel lines
     spacing: float = 0.04        # beam: distance between parallel lines (x height)
+    preset: str = ""             # preset it was made from (its settings are the reset defaults)
     core: float = 0.5            # sun: how much the centre glows towards white
     softness: float = 0.025      # sun: edge feather (fraction of the radius)
     cuts: int = 0                # sun: horizontal cut lines near the horizon
@@ -174,7 +175,20 @@ def preset_element(kind: str) -> Element:
         "horizon": dict(name="Horizon", type="horizon", x=0.5, y=0.84, size=0.9, height=0.6, idle=0.12, count=6),
         "beam": dict(name="Horizontal beam", type="beam", x=0.5, y=0.9, size=0.8, thickness=6, idle=0.2, count=1),
     }
-    return Element(new_id(), **presets.get(kind, presets["polygon"]))
+    kind = kind if kind in presets else "polygon"
+    return Element(new_id(), preset=kind, **presets[kind])
+
+
+_TYPE_PRESET = {"sun": "sun", "polygon": "polygon", "ring": "ring", "bars": "bars", "shafts": "shafts",
+                "horizon": "horizon", "beam": "beam"}
+
+
+def element_defaults(el: Element) -> Element:
+    """The default settings for an element: those of the preset it came from."""
+    d = preset_element(el.preset or _TYPE_PRESET.get(el.type, "polygon"))
+    if d.type != el.type:
+        d = preset_element(_TYPE_PRESET.get(el.type, "polygon"))
+    return d
 
 
 @dataclass

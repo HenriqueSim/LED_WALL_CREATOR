@@ -10,7 +10,10 @@ from PyQt6.QtWidgets import (
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from .common import ColorButton, LabeledSlider, hint
+from ..model import Look
+from .common import ColorButton, LabeledSlider, add_slider_row, hint
+
+_LOOK_DEFAULTS = Look()
 
 SONG_COLORS = [
     ("Amber", (255, 168, 40)), ("Gold", (255, 205, 60)), ("Red", (235, 50, 35)), ("Rose", (255, 80, 130)),
@@ -148,9 +151,10 @@ class LookTab(QWidget):
 
     # ---- helpers ----------------------------------------------------------------------------
     def _slider(self, form, label, attr, lo, hi, step, fmt="{:.2f}", integer=False):
-        s = LabeledSlider(lo, hi, getattr(self.ctl.song.look, attr), step, fmt)
-        s.valueChanged.connect(lambda v: self._set(attr, int(round(v)) if integer else v))
-        form.addRow(label, s)
+        s = LabeledSlider(lo, hi, getattr(self.ctl.song.look, attr), step, fmt, default=getattr(_LOOK_DEFAULTS, attr))
+        s.valueChanged.connect(lambda v: self._set(attr, int(round(v)) if integer else v,
+                                                   key=attr + (":reset" if s.resetting else "")))
+        add_slider_row(form, label, s)
         self._widgets[attr] = s
 
     def _set(self, attr, value, key=None):

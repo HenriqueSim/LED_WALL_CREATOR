@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QColorDialog, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QWidget
 
@@ -66,23 +66,44 @@ class ColorButton(QPushButton):
             self.colorChanged.emit(self.rgb)
 
 
+class _DoubleClickFilter(QObject):
+    """Calls `fn` when the watched widget is double-clicked."""
+
+    def __init__(self, fn, parent):
+        super().__init__(parent)
+        self.fn = fn
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.MouseButtonDblClick:
+            self.fn()
+            return True
+        return False
+
+
 class LabeledSlider(QWidget):
+    """Slider + value readout. Double-click the value (or the row's name, see attach_name_label)
+    to reset it to its default."""
     valueChanged = pyqtSignal(float)
 
-    def __init__(self, lo: float, hi: float, value: float, step: float = 0.01, fmt="{:.2f}", parent=None):
+    def __init__(self, lo: float, hi: float, value: float, step: float = 0.01, fmt="{:.2f}", parent=None,
+                 default: float | None = None):
         super().__init__(parent)
         self.lo, self.step, self.fmt = lo, step, fmt
+        self.default = value if default is None else default
+        self.resetting = False      # True while a reset emits valueChanged (own undo step)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, int(round((hi - lo) / step)))
         self.label = QLabel()
         self.label.setFixedWidth(52)
         self.label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.label.installEventFilter(_DoubleClickFilter(self.reset, self))
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.slider, 1)
         lay.addWidget(self.label)
         self.slider.valueChanged.connect(self._changed)
         self.set_value(value)
+        self.set_default(self.default)
 
     def value(self) -> float:
         return self.lo + self.slider.value() * self.step
@@ -93,9 +114,39 @@ class LabeledSlider(QWidget):
         self.slider.blockSignals(False)
         self.label.setText(self.fmt.format(self.value()))
 
+    def set_default(self, v: float):
+        self.default = v
+        tip = f"Double-click to reset to the default ({self.fmt.format(v)})"
+        self.label.setToolTip(tip)
+        for lab in getattr(self, "_name_labels", []):
+            lab.setToolTip(tip)
+
+    def reset(self):
+        """Back to the default value; emits valueChanged like a user move."""
+        self.set_value(self.default)
+        self.resetting = True
+        try:
+            self.valueChanged.emit(self.value())
+        finally:
+            self.resetting = False
+
+    def attach_name_label(self, lab):
+        """Make the row's name label reset this slider on double-click too."""
+        if lab is None:
+            return
+        lab.installEventFilter(_DoubleClickFilter(self.reset, lab))
+        self._name_labels = getattr(self, "_name_labels", []) + [lab]
+        lab.setToolTip(self.label.toolTip())
+
     def _changed(self, _):
         self.label.setText(self.fmt.format(self.value()))
         self.valueChanged.emit(self.value())
+
+
+def add_slider_row(form, label: str, slider: "LabeledSlider"):
+    """form.addRow(label, slider) with the name label wired to reset the slider."""
+    form.addRow(label, slider)
+    slider.attach_name_label(form.labelForField(slider))
 
 
 class PreviewCanvas(QLabel):

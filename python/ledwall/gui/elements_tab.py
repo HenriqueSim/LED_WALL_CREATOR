@@ -15,8 +15,8 @@ from PyQt6.QtWidgets import (
     QMenu, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from ..model import ELEMENT_LABELS, new_id, preset_element
-from .common import ColorButton, LabeledSlider, hint
+from ..model import ELEMENT_LABELS, element_defaults, new_id, preset_element
+from .common import ColorButton, LabeledSlider, add_slider_row, hint
 
 PRESETS = [
     ("sun", "Sunset sun"), ("beam", "Horizontal beam"), ("hexagon", "Hexagon"), ("polygon", "Polygon"),
@@ -225,12 +225,12 @@ class ElementsTab(QWidget):
                 els[i], els[i + d] = els[i + d], els[i]
                 self._commit()
 
-    def _set(self, attr, value, refresh_list=False):
+    def _set(self, attr, value, refresh_list=False, reset=False):
         el = self.element
         if self._updating or not el:
             return
         setattr(el, attr, value)
-        self._commit(f"{el.id}:{attr}")
+        self._commit(f"{el.id}:{attr}" + (":reset" if reset else ""))
         if refresh_list:
             it = self.list.currentItem()
             if it:
@@ -306,8 +306,9 @@ class ElementsTab(QWidget):
                     continue
                 attr, label, lo, hi, step, fmt = spec
                 sl = LabeledSlider(lo, hi, lo, step, fmt)
-                sl.valueChanged.connect(lambda v, a=attr: self._set(a, int(round(v)) if a in INT_ATTRS else v))
-                form.addRow(label, sl)
+                sl.valueChanged.connect(lambda v, a=attr, w=sl: self._set(a, int(round(v)) if a in INT_ATTRS else v,
+                                                                          reset=w.resetting))
+                add_slider_row(form, label, sl)
                 self.sliders[attr] = sl
         self._built_for = (el.id, el.type)
 
@@ -329,8 +330,10 @@ class ElementsTab(QWidget):
             self.btn_custom.setEnabled(el.color == "custom")
             if self.combo_fill is not None:
                 self.combo_fill.setCurrentIndex(max(0, self.combo_fill.findData(el.fill)))
+            defaults = element_defaults(el)
             for attr, sl in self.sliders.items():
                 sl.set_value(getattr(el, attr))
+                sl.set_default(getattr(defaults, attr))
             n = {"sun": 1, "polygon": el.sides}.get(el.type, el.count)
             m = len(self.ctl.song.members)
             share = PARTS_HINT.get(el.type) or (

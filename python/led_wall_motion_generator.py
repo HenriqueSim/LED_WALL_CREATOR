@@ -35,7 +35,7 @@
 #    controller.py  undo/redo + change notifications
 #    gui/           one module per tab + main window
 #
-#  Fonts: fonts/Anton-Regular.ttf (SIL Open Font License, see fonts/OFL.txt)
+#  Fonts: fonts/*.ttf (SIL Open Font License, see fonts/README.md), loaded at start
 # =============================================================================
 
 import os
@@ -44,7 +44,6 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from PyQt6.QtGui import QFontDatabase  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 
@@ -52,9 +51,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("LED Wall Motion Generator")
     app.setStyle("Fusion")
-    font_path = os.path.join(HERE, "fonts", "Anton-Regular.ttf")
-    if QFontDatabase.addApplicationFont(font_path) < 0:
-        print(f"warning: could not load {font_path}; band name will use a fallback font", file=sys.stderr)
+    from ledwall.resources import load_bundled_fonts
+    load_bundled_fonts()
 
     from ledwall.gui.common import DARK_QSS
     from ledwall.gui.main_window import MainWindow

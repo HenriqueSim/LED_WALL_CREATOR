@@ -75,6 +75,8 @@ class FrameRenderer:
         self._layout_cache: dict = {}
         self._sun_cache: dict = {}
         self._logo_key = None
+        self.logo_bbox = None
+        self.shape_bboxes: dict = {}    # (element id, shape index) -> bbox, for picking shapes in the GUI
         self._lyric_cache: dict = {}
         self.bboxes: dict = {}          # element id -> (x0, y0, x1, y1) in pixels, for hit-testing in the GUI
 
@@ -160,7 +162,8 @@ class FrameRenderer:
         core.fill(0)
         glow_src = np.zeros((self.sh, self.sw, 3), np.float32)
         self.bboxes = {}
-        drawers = {"sun": self._draw_sun, "polygon": self._draw_polygon, "ring": self._draw_ring, "bars": self._draw_bars,
+        self.shape_bboxes = {}
+        drawers = {"custom": self._draw_custom, "sun": self._draw_sun, "polygon": self._draw_polygon, "ring": self._draw_ring, "bars": self._draw_bars,
                    "shafts": self._draw_shafts, "horizon": self._draw_horizon, "beam": self._draw_beam}
         any_visible = False
         for el in reversed(song.elements):          # list top = front layer
@@ -191,11 +194,115 @@ class FrameRenderer:
         out = cv2.add(core, cv2.resize(glow.astype(np.uint8), (self.w, self.h), interpolation=cv2.INTER_LINEAR))
         if st.blackout > 0.001:
             out = cv2.convertScaleAbs(out, alpha=max(0.0, 1.0 - st.blackout))
-        if lk.logo_text.strip() and (st.logo_level > 0.003 or st.logo_peak > 0.003):
-            self._overlay_logo(out, st, song)
+        if not lk.logo_text.strip():
+            self.logo_bbox = None
+        else:
+            if st.logo_level > 0.003 or st.logo_peak > 0.003:
+                self._overlay_logo(out, st, song)
+            else:
+                self._logo_layers(lk)        # keeps logo_bbox current for picking in the GUI
         if st.lyric and st.lyric_alpha > 0.003:
             self._overlay_lyric(out, st, song)
         return out
+
+    # ---- element: custom (user-built from shapes) -------------------------------------------
+    def _draw_custom(self, layer, el, st, song):
+        lk = song.look
+        shapes = el.shapes or []
+        n = max(1, len(shapes))
+        levels, b, flash = self._drive(el, st, song, n)
+        cols = self._part_colors(el, lk, flash)
+        S = el.size * self.h * (1.0 + el.react_scale * float(np.mean(np.minimum(levels, 1.2))))
+        cx, cy = el.x * self.w, el.y * self.h
+        a0 = math.radians(el.rotation + el.spin * st.beat)
+        ca, sa = math.cos(a0), math.sin(a0)
+        boxes = []
+        for i, sh in enumerate(shapes):
+            pts_all = []
+            bb, col = float(b[i]), cols[i]
+            if bb <= 0.002:
+                pts_all = self._shape_outline(sh, cx, cy, S, ca, sa, a0)
+            else:
+                pts_all = self._draw_shape(layer, sh, cx, cy, S, ca, sa, a0, _bgr(col, bb), bb)
+            if len(pts_all):
+                P = np.asarray(pts_all, np.float64)
+                pad = self.th(sh.get("thickness", 5)) + 2
+                box = (P[:, 0].min() - pad, P[:, 1].min() - pad, P[:, 0].max() + pad, P[:, 1].max() + pad)
+                self.shape_bboxes[(el.id, i)] = box
+                boxes.append(box)
+        if boxes:
+            B = np.array(boxes)
+            self.bboxes[el.id] = (B[:, 0].min(), B[:, 1].min(), B[:, 2].max(), B[:, 3].max())
+        else:
+            self.bboxes[el.id] = (cx - S, cy - S, cx + S, cy + S)
+
+    @staticmethod
+    def _shape_geom(sh, cx, cy, S, ca, sa, a0):
+        """Centre (px) and absolute angle (rad) of a shape inside its element."""
+        lx, ly = sh.get("x", 0.0) * S, sh.get("y", 0.0) * S
+        c = np.array([cx + lx * ca - ly * sa, cy + lx * sa + ly * ca])
+        return c, a0 + math.radians(sh.get("rot", 0.0))
+
+    def _shape_polylines(self, sh, cx, cy, S, ca, sa, a0):
+        """[(points, closed)] describing a shape (for drawing and bounding boxes)."""
+        kind = sh.get("kind", "line")
+        c, a = self._shape_geom(sh, cx, cy, S, ca, sa, a0)
+        d = np.array([math.cos(a), math.sin(a)])
+        nrm = np.array([-d[1], d[0]])
+        size = max(0.0, sh.get("size", 0.5)) * S
+        if kind == "line":
+            return [(np.array([c - d * size / 2, c + d * size / 2]), False)]
+        if kind == "dashes":
+            n = max(1, int(sh.get("dashes", 8)))
+            seg = size / n
+            p0 = c - d * size / 2
+            return [(np.array([p0 + d * (k * seg + seg * 0.2), p0 + d * ((k + 1) * seg - seg * 0.2)]), False) for k in range(n)]
+        if kind == "rect":
+            hw, hh = size / 2, max(0.0, sh.get("h", 0.3)) * S / 2
+            return [(np.array([c + d * x + nrm * y for x, y in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))]), True)]
+        if kind == "circle":
+            t = np.linspace(0, 2 * math.pi, 73)[:-1]
+            return [(np.stack([c[0] + size * np.cos(t), c[1] + size * np.sin(t)], 1), True)]
+        if kind == "arc":
+            sweep = math.radians(max(1.0, min(360.0, sh.get("sweep", 180.0))))
+            t = a + np.linspace(0, sweep, max(8, int(sweep / (2 * math.pi) * 96)))
+            return [(np.stack([c[0] + size * np.cos(t), c[1] + size * np.sin(t)], 1), sweep >= 2 * math.pi - 1e-6)]
+        if kind == "polygon":
+            k = max(3, int(sh.get("sides", 3)))
+            t = a - math.pi / 2 + np.arange(k) * 2 * math.pi / k
+            return [(np.stack([c[0] + size * np.cos(t), c[1] + size * np.sin(t)], 1), True)]
+        if kind == "rays":
+            n = max(1, int(sh.get("dashes", 9)))
+            sweep = math.radians(max(0.0, min(360.0, sh.get("sweep", 180.0))))
+            inner = max(0.0, sh.get("h", 0.5)) * S
+            step = sweep / n if sweep >= 2 * math.pi - 1e-6 else sweep / max(1, n - 1)
+            out = []
+            for k in range(n):
+                t = a + (k * step if n > 1 else sweep / 2)
+                u = np.array([math.cos(t), math.sin(t)])
+                out.append((np.array([c + u * inner, c + u * size]), False))
+            return out
+        return []
+
+    def _shape_outline(self, sh, cx, cy, S, ca, sa, a0):
+        pts = [p for poly, _ in self._shape_polylines(sh, cx, cy, S, ca, sa, a0) for p in poly]
+        return pts
+
+    def _draw_shape(self, layer, sh, cx, cy, S, ca, sa, a0, color, bb):
+        polys = self._shape_polylines(sh, cx, cy, S, ca, sa, a0)
+        t = self.th(sh.get("thickness", 5))
+        kind = sh.get("kind")
+        fill = sh.get("filled", False) and kind in ("rect", "circle", "arc", "polygon")
+        for poly, closed in polys:
+            if fill:
+                pts = poly
+                if kind == "arc" and not closed:   # a filled arc is a pie slice
+                    c, _ = self._shape_geom(sh, cx, cy, S, ca, sa, a0)
+                    pts = np.vstack([c[None, :], poly])
+                dim = tuple(v * 0.8 for v in color)
+                cv2.fillPoly(layer, [_fx(pts)], dim, AA, SHIFT)
+            cv2.polylines(layer, [_fx(poly)], closed, color, t, AA, SHIFT)
+        return [p for poly, _ in polys for p in poly]
 
     # ---- element: sunset sun -------------------------------------------------------------
     def _sun_maps(self, cx, cy, R, soft, cuts):
@@ -505,75 +612,88 @@ class FrameRenderer:
         self.bboxes[el.id] = (cx - ex, cy - ey, cx + ex, cy + ey)
 
     # ---- band name layer ----------------------------------------------------------------------
+    @staticmethod
+    def logo_lines(lk) -> list:
+        """The band name split into lines according to the layout."""
+        text = " ".join(lk.logo_text.split())
+        text = {"upper": text.upper(), "lower": text.lower()}.get(lk.logo_case, text)
+        words = text.split()
+        if lk.logo_layout == "stacked" and len(words) >= 2:
+            return [words[0] + ("." if lk.logo_dot else ""), " ".join(words[1:])]
+        if lk.logo_layout == "two_lines" and len(words) >= 2:
+            cut = min(range(1, len(words)), key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:]))))
+            return [" ".join(words[:cut]), " ".join(words[cut:])]
+        return [text] if text else []
+
     def _logo_layers(self, lk):
-        key = (lk.logo_text, lk.logo_stacked, round(lk.logo_size, 3), round(lk.logo_y, 3),
-               round(lk.logo_glow_radius, 1), self.w, self.h)
+        key = (lk.logo_text, lk.logo_layout, lk.logo_dot, round(lk.logo_offset, 3), lk.logo_font, lk.logo_case,
+               round(lk.logo_size, 3), round(lk.logo_x, 3), round(lk.logo_y, 3), round(lk.logo_glow_radius, 1), self.w, self.h)
         if key == self._logo_key:
             return self._logo
         self._logo_key, self._logo = key, None
-        text = lk.logo_text.strip()
-        words = text.split()
+        self.logo_bbox = None
+        lines = self.logo_lines(lk)
+        if not lines:
+            return None
         img = QImage(self.w, self.h, QImage.Format.Format_Grayscale8)
         img.fill(0)
-        font = QFont(LOGO_FONT)
+        font = QFont(lk.logo_font or LOGO_FONT)
         font.setPixelSize(100)
         xh100 = QFontMetricsF(font).xHeight() or 50.0
-        stacked = lk.logo_stacked and len(words) >= 2
+        two = len(lines) == 2
         target_h = lk.logo_size * self.h
-        xh = target_h / (2.1 if stacked else 1.35)
+        xh = target_h / (2.1 if two else 1.35)
         font.setPixelSize(max(6, int(round(100 * xh / xh100))))
-        fm = QFontMetricsF(font)
-        xh = fm.xHeight()
+        stacked = two and lk.logo_layout == "stacked"
+
+        def layout(font):
+            fm = QFontMetricsF(font)
+            xh = fm.xHeight() or fm.height() * 0.5
+            rects = [fm.tightBoundingRect(t) for t in lines]
+            if not two:
+                return fm, [(0.0, 0.0)], rects
+            if stacked:   # 2nd line shifted right, tight leading
+                return fm, [(0.0, 0.0), (fm.horizontalAdvance(lines[0]) * lk.logo_offset, xh * 1.07)], rects
+            dy = max(xh * 1.25, rects[0].bottom() - rects[1].top() + xh * 0.25)
+            c0 = (rects[0].left() + rects[0].right()) / 2
+            c1 = (rects[1].left() + rects[1].right()) / 2
+            return fm, [(0.0, 0.0), (c0 - c1, dy)], rects
+
+        fm, offs, rects = layout(font)
+
+        def extent(offs, rects):
+            left = min(o[0] + r.left() for o, r in zip(offs, rects))
+            right = max(o[0] + r.right() for o, r in zip(offs, rects))
+            top = min(o[1] + r.top() for o, r in zip(offs, rects))
+            bottom = max(o[1] + r.bottom() for o, r in zip(offs, rects))
+            return left, right, top, bottom
+
+        left, right, top, bottom = extent(offs, rects)
+        # keep it on the wall and no taller than asked for (script fonts have tall ascenders)
+        f = min(1.0, self.w * 0.92 / max(1.0, right - left), min(target_h * 1.2, self.h * 0.95) / max(1.0, bottom - top))
+        if f < 0.999:
+            font.setPixelSize(max(6, int(font.pixelSize() * f)))
+            fm, offs, rects = layout(font)
+            left, right, top, bottom = extent(offs, rects)
         painter = QPainter(img)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
-        if stacked:
-            # layout of the reference logo: "vespa." / "maia" offset right, tight leading,
-            # descenders of the first line cut at the baseline
-            l1, l2 = words[0] + ".", " ".join(words[1:])
-            r1, r2 = fm.tightBoundingRect(l1), fm.tightBoundingRect(l2)
-            adv1 = fm.horizontalAdvance(l1)
-            dx2 = adv1 * 0.456
-            dy2 = xh * 1.07
-            left = min(r1.left(), dx2 + r2.left())
-            right = max(r1.right(), dx2 + r2.right())
-            top = r1.top()
-            bottom = dy2 + r2.bottom()
-            if right - left > self.w * 0.9:          # keep it on the wall
-                f = self.w * 0.9 / (right - left)
-                font.setPixelSize(max(6, int(font.pixelSize() * f)))
-                painter.setFont(font)
-                fm = QFontMetricsF(font)
-                xh = fm.xHeight()
-                r1, r2 = fm.tightBoundingRect(l1), fm.tightBoundingRect(l2)
-                adv1 = fm.horizontalAdvance(l1)
-                dx2, dy2 = adv1 * 0.456, xh * 1.07
-                left, right = min(r1.left(), dx2 + r2.left()), max(r1.right(), dx2 + r2.right())
-                top, bottom = r1.top(), dy2 + r2.bottom()
-            ox = self.w / 2 - (left + right) / 2
-            oy = lk.logo_y * self.h - (top + bottom) / 2
-            painter.setClipRect(QRectF(0, 0, self.w, oy + 0.5))
-            painter.drawText(QRectF(ox, oy - fm.ascent(), self.w * 2, fm.height()), Qt.AlignmentFlag.AlignLeft, l1)
+        ox = lk.logo_x * self.w - (left + right) / 2
+        oy = lk.logo_y * self.h - (top + bottom) / 2
+        for i, (t, (dx, dy)) in enumerate(zip(lines, offs)):
+            if stacked and i == 0:   # descenders of the first line cut at its baseline
+                painter.setClipRect(QRectF(0, 0, self.w, oy + 0.5))
+            painter.drawText(QRectF(ox + dx, oy + dy - fm.ascent(), self.w * 2, fm.height()), Qt.AlignmentFlag.AlignLeft, t)
             painter.setClipping(False)
-            painter.drawText(QRectF(ox + dx2, oy + dy2 - fm.ascent(), self.w * 2, fm.height()), Qt.AlignmentFlag.AlignLeft, l2)
-        else:
-            r = fm.tightBoundingRect(text)
-            if r.width() > self.w * 0.9:
-                font.setPixelSize(max(6, int(font.pixelSize() * self.w * 0.9 / r.width())))
-                painter.setFont(font)
-                fm = QFontMetricsF(font)
-                r = fm.tightBoundingRect(text)
-            ox = self.w / 2 - (r.left() + r.right()) / 2
-            oy = lk.logo_y * self.h - (r.top() + r.bottom()) / 2
-            painter.drawText(QRectF(ox, oy - fm.ascent(), self.w * 2, fm.height()), Qt.AlignmentFlag.AlignLeft, text)
         painter.end()
         arr = _qimage_to_array(img, self.w, self.h)
         if not arr.any():
             return None
         R = max(2.0, lk.logo_glow_radius * self.s)
         x, y, ww, hh = cv2.boundingRect(arr)
+        self.logo_bbox = (x, y, x + ww, y + hh)
         pad = int(R * 3)
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(self.w, x + ww + pad), min(self.h, y + hh + pad)
@@ -608,14 +728,14 @@ class FrameRenderer:
 
     # ---- lyrics -----------------------------------------------------------------------------------
     def _lyric_layers(self, text: str, lk):
-        key = (text, round(lk.lyrics_size, 3), round(lk.headroom, 3))
+        key = (text, round(lk.lyrics_size, 3), round(lk.headroom, 3), lk.lyrics_font or lk.logo_font)
         if key in self._lyric_cache:
             return self._lyric_cache[key]
         if len(self._lyric_cache) > 48:
             self._lyric_cache.clear()
         img = QImage(self.w, self.h, QImage.Format.Format_Grayscale8)
         img.fill(0)
-        font = QFont(LOGO_FONT)
+        font = QFont(lk.lyrics_font or lk.logo_font or LOGO_FONT)
         font.setPixelSize(100)
         cap100 = QFontMetricsF(font).capHeight() or 70.0
         cap = min(lk.lyrics_size * self.h, lk.headroom * self.h * 0.62)

@@ -1,12 +1,13 @@
-"""Look & Song: audio + tempo, THE song colour, background design and the band name layer."""
+"""Look & Song: audio + tempo, THE song colour, the global light settings and the lyrics."""
 
 from __future__ import annotations
 
 import os
 
 from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QProgressBar,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QProgressBar,
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -91,7 +92,7 @@ class LookTab(QWidget):
                        "ambient light are all derived from it."))
 
         # ---- background ----------------------------------------------------------------
-        g_bg = QGroupBox("Light & motion (all elements)")
+        g_bg = QGroupBox("Light && motion (all elements)")
         fb = QFormLayout(g_bg)
         fb.addRow(hint("The shapes themselves are built in the Elements tab."))
         self._slider(fb, "Glow radius", "glow_radius", 2, 90, 1, "{:.0f}px")
@@ -105,36 +106,24 @@ class LookTab(QWidget):
             self.combo_strobe.addItem(f"{n} per beat", n)
         self.combo_strobe.currentIndexChanged.connect(lambda i: self._set("strobe_rate", self.combo_strobe.itemData(i)))
         fb.addRow("Strobe rate", self.combo_strobe)
-        self._slider(fb, "Lyrics headroom", "headroom", 0.1, 0.4, 0.01)
-        self._slider(fb, "Lyrics size", "lyrics_size", 0.05, 0.2, 0.005, "{:.3f}")
 
-        # ---- band name --------------------------------------------------------------------
-        g_logo = QGroupBox("Band name layer (stacks on top of any design)")
-        fl = QFormLayout(g_logo)
-        self.edit_logo = QLineEdit(lk.logo_text)
-        self.edit_logo.textChanged.connect(lambda t: self._set("logo_text", t, key="logo_text"))
-        fl.addRow("Name", self.edit_logo)
-        self.chk_stacked = QCheckBox("Stacked logo layout (vespa. / maia)")
-        self.chk_stacked.toggled.connect(lambda v: self._set("logo_stacked", v))
-        fl.addRow(self.chk_stacked)
-        self.combo_logo_col = QComboBox()
-        for key, label in (("accent", "Accent colour"), ("main", "Song colour"), ("white", "White"), ("cutout", "Dark cut-out (silhouette)")):
-            self.combo_logo_col.addItem(label, key)
-        self.combo_logo_col.currentIndexChanged.connect(lambda i: self._set("logo_color", self.combo_logo_col.itemData(i)))
-        fl.addRow("Colour", self.combo_logo_col)
-        self._slider(fl, "Size", "logo_size", 0.15, 0.7, 0.01)
-        self._slider(fl, "Vertical position", "logo_y", 0.3, 0.8, 0.01)
-        self._slider(fl, "Fade in", "logo_attack_ms", 0, 4000, 10, "{:.0f}ms")
-        self._slider(fl, "Fade out", "logo_release_ms", 0, 8000, 20, "{:.0f}ms")
-        self._slider(fl, "Peak glow", "logo_peak", 0, 3, 0.05)
-        self._slider(fl, "Peak decay", "logo_peak_decay_ms", 50, 4000, 10, "{:.0f}ms")
-        self._slider(fl, "Glow radius", "logo_glow_radius", 4, 120, 1, "{:.0f}px")
-        self._slider(fl, "Always visible", "logo_idle", 0, 1, 0.01)
-        fl.addRow(hint("The name shows wherever the 'Band Name' row has notes; note velocity = brightness. "
-                       "Each note start fires a glow peak that decays with its own timing."))
+        # ---- lyrics ------------------------------------------------------------------------------
+        g_lyr = QGroupBox("Lyrics")
+        fy = QFormLayout(g_lyr)
+        self._slider(fy, "Room at the top", "headroom", 0.1, 0.4, 0.01)
+        self._slider(fy, "Lyrics size", "lyrics_size", 0.05, 0.2, 0.005, "{:.3f}")
+        self.chk_lyr_font = QCheckBox("Same font as the band name")
+        self.chk_lyr_font.toggled.connect(self._on_lyr_same)
+        fy.addRow(self.chk_lyr_font)
+        self.combo_lyr_font = QFontComboBox()
+        self.combo_lyr_font.currentFontChanged.connect(
+            lambda f: self._set("lyrics_font", f.family()) if not self.chk_lyr_font.isChecked() else None)
+        fy.addRow("Font", self.combo_lyr_font)
+        fy.addRow(hint("Lyrics are added on the Master Track (Lyrics lane). The band name, its font and "
+                       "layout are set in the Elements tab (★ Band name)."))
 
         cols = QHBoxLayout()
-        for g in (g_song, g_bg, g_logo):
+        for g in (g_song, g_bg, g_lyr):
             cols.addWidget(g, 1)
         inner = QWidget()
         v = QVBoxLayout(inner)
@@ -146,7 +135,7 @@ class LookTab(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(scroll)
-        ctl.changed.connect(lambda kind: self.reload() if kind in ("all", "audio") else None)
+        ctl.changed.connect(lambda kind: self.reload() if kind in ("all", "audio", "look") else None)
         self.reload()
 
     # ---- helpers ----------------------------------------------------------------------------
@@ -162,6 +151,11 @@ class LookTab(QWidget):
             return
         setattr(self.ctl.song.look, attr, value)
         self.ctl.commit("look", key or attr)
+
+    def _on_lyr_same(self, same):
+        self.combo_lyr_font.setEnabled(not same)
+        if not self._updating:
+            self._set("lyrics_font", "" if same else self.combo_lyr_font.currentFont().family())
 
     def _on_bpm(self, v):
         if not self._updating and abs(v - self.ctl.song.bpm) > 1e-6:
@@ -203,10 +197,9 @@ class LookTab(QWidget):
         self.btn_main.set_rgb(lk.main_rgb)
         self.btn_accent.set_rgb(lk.accent_rgb)
         self.combo_strobe.setCurrentIndex(max(0, self.combo_strobe.findData(lk.strobe_rate)))
-        self.combo_logo_col.setCurrentIndex(max(0, self.combo_logo_col.findData(lk.logo_color)))
-        if self.edit_logo.text() != lk.logo_text:
-            self.edit_logo.setText(lk.logo_text)
-        self.chk_stacked.setChecked(lk.logo_stacked)
+        self.chk_lyr_font.setChecked(not lk.lyrics_font)
+        self.combo_lyr_font.setEnabled(bool(lk.lyrics_font))
+        self.combo_lyr_font.setCurrentFont(QFont(lk.lyrics_font or lk.logo_font))
         for attr, w in self._widgets.items():
             w.set_value(getattr(lk, attr))
         self._updating = False

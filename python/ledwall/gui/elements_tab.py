@@ -10,21 +10,26 @@ from __future__ import annotations
 import copy
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMenu, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QMenu, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from ..model import ELEMENT_LABELS, element_defaults, new_id, preset_element
+from ..model import ELEMENT_LABELS, SHAPE_KINDS, SHAPE_LABELS, element_defaults, new_id, new_shape, preset_element
+from .band_name_panel import BandNamePanel
 from .common import ColorButton, LabeledSlider, add_slider_row, hint
 
+LOGO_ID = "__logo__"     # list entry for the band name layer
+
 PRESETS = [
+    ("custom", "Custom (build from shapes)"), ("custom_rays", "Custom example: rising rays"),
     ("sun", "Sunset sun"), ("beam", "Horizontal beam"), ("hexagon", "Hexagon"), ("polygon", "Polygon"),
     ("ring", "Ring / circle"), ("bar", "Single bar"), ("bars", "Vertical blocks"), ("shafts", "Light shafts"),
     ("horizon", "Horizon lights"),
 ]
 
-INT_ATTRS = {"sides", "count", "lines", "cuts"}
+INT_ATTRS = {"sides", "count", "lines", "cuts", "dashes"}
 X = ("x", "Horizontal position", 0, 1, 0.005, "{:.3f}")
 Y = ("y", "Vertical position", 0, 1.2, 0.005, "{:.3f}")
 ROT = ("rotation", "Rotation", -180, 180, 1, "{:.0f}°")
@@ -51,6 +56,26 @@ SHAPE_FIELDS = {
     "beam": [("count", "Segments", 1, 24, 1, "{:.0f}"), ("size", "Length", 0.02, 1.0, 0.005, "{:.3f}"),
              ("lines", "Parallel lines", 1, 8, 1, "{:.0f}"), ("spacing", "Line spacing", 0.005, 0.3, 0.005, "{:.3f}"),
              THICK, X, Y, ROT, SPIN],
+    "custom": [("size", "Scale", 0.02, 1.5, 0.005, "{:.3f}"), X, Y, ROT, SPIN],
+}
+
+# settings of one shape inside a custom element, per shape kind
+_SX = ("x", "Offset X", -3, 3, 0.01, "{:.2f}")
+_SY = ("y", "Offset Y", -3, 3, 0.01, "{:.2f}")
+_SROT = ("rot", "Angle", -180, 180, 1, "{:.0f}°")
+_STH = ("thickness", "Line thickness", 0.5, 30, 0.5, "{:.1f}px")
+_SFILL = ("filled",)
+SHAPE_EDIT_FIELDS = {
+    "line": [("size", "Length", 0.02, 6, 0.01, "{:.2f}"), _SX, _SY, _SROT, _STH],
+    "dashes": [("size", "Length", 0.02, 6, 0.01, "{:.2f}"), ("dashes", "Dashes", 1, 40, 1, "{:.0f}"), _SX, _SY, _SROT, _STH],
+    "rect": [("size", "Width", 0.01, 6, 0.01, "{:.2f}"), ("h", "Height", 0.01, 6, 0.01, "{:.2f}"), _SFILL, _SX, _SY, _SROT, _STH],
+    "circle": [("size", "Radius", 0.01, 3, 0.01, "{:.2f}"), _SFILL, _SX, _SY, _STH],
+    "arc": [("size", "Radius", 0.01, 3, 0.01, "{:.2f}"), ("sweep", "Sweep", 1, 360, 1, "{:.0f}°"), _SFILL, _SX, _SY,
+            ("rot", "Start angle", -180, 180, 1, "{:.0f}°"), _STH],
+    "polygon": [("sides", "Sides", 3, 12, 1, "{:.0f}"), ("size", "Radius", 0.01, 3, 0.01, "{:.2f}"), _SFILL, _SX, _SY, _SROT, _STH],
+    "rays": [("dashes", "Number of rays", 1, 48, 1, "{:.0f}"), ("size", "Outer radius", 0.05, 6, 0.01, "{:.2f}"),
+             ("h", "Inner radius", 0, 6, 0.01, "{:.2f}"), ("sweep", "Spread", 0, 360, 1, "{:.0f}°"), _SX, _SY,
+             ("rot", "Start angle", -180, 180, 1, "{:.0f}°"), _STH],
 }
 LIGHT_FIELDS = {
     "sun": [("glow", "Halo", 0, 3, 0.05, "{:.2f}"), ("idle", "Resting brightness", 0, 1, 0.01, "{:.2f}"),
@@ -60,6 +85,7 @@ DEFAULT_LIGHT = [("glow", "Glow", 0, 3, 0.05, "{:.2f}"), ("idle", "Idle glow in 
 PARTS_HINT = {
     "sun": "One part: lit by the brightest of its lanes.",
     "polygon": "Each side is a part.",
+    "custom": "Each shape is a part, shared out between the members in list order.",
 }
 
 
@@ -113,8 +139,9 @@ class ElementsTab(QWidget):
         self.chk_pulse.toggled.connect(self.previewModeChanged.emit)
         ll.addWidget(self.chk_pulse)
         ll.addWidget(hint("Checked = available in this project: it gets its own folder of lanes in the Pattern "
-                          "Editor, where notes bring it in and out of the scene. Click an element in the preview "
-                          "to select it, drag to move, mouse wheel to resize. Double-click a name to rename."))
+                          "Editor, where notes bring it in and out of the scene. Click an element (or the band "
+                          "name) in the preview to select it, drag to move, mouse wheel to resize. Double-click "
+                          "a name to rename."))
 
         # ---- properties --------------------------------------------------------------------
         props = QWidget()
@@ -150,6 +177,44 @@ class ElementsTab(QWidget):
         cols.addWidget(self.grp_shape, 1)
         cols.addWidget(self.grp_light, 1)
         pv.addLayout(cols)
+        # custom elements: the list of shapes and the selected shape's settings
+        self.grp_shapes = QGroupBox("Shapes (each one is a part)")
+        gs = QHBoxLayout(self.grp_shapes)
+        sl_col = QVBoxLayout()
+        self.shape_list = QListWidget()
+        self.shape_list.setMaximumWidth(230)
+        self.shape_list.currentRowChanged.connect(self._on_shape_row)
+        sl_col.addWidget(self.shape_list, 1)
+        srow = QHBoxLayout()
+        b_add = QPushButton("Add shape")
+        smenu = QMenu(self)
+        for kind, label in SHAPE_KINDS:
+            smenu.addAction(label).triggered.connect(lambda _=False, k=kind: self.add_shape(k))
+        b_add.setMenu(smenu)
+        srow.addWidget(b_add)
+        for text, fn in (("Copy", self.duplicate_shape), ("Delete", self.delete_shape)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            srow.addWidget(b)
+        sl_col.addLayout(srow)
+        srow2 = QHBoxLayout()
+        for text, d in (("▲", -1), ("▼", 1)):
+            b = QPushButton(text)
+            b.setToolTip("Move up / down (changes which member lights it)")
+            b.clicked.connect(lambda _=False, dd=d: self.move_shape(dd))
+            srow2.addWidget(b)
+        sl_col.addLayout(srow2)
+        sl_col.addWidget(hint("Click a shape in the preview to pick it, drag to move, wheel to resize."))
+        gs.addLayout(sl_col)
+        self.shape_box = QWidget()
+        self.shape_box.setLayout(QVBoxLayout())
+        self.shape_box.layout().setContentsMargins(0, 0, 0, 0)
+        self.shape_box.inner = None
+        gs.addWidget(self.shape_box, 1)
+        pv.addWidget(self.grp_shapes)
+        self.selected_shape: int | None = None
+        self.shape_sliders: dict = {}
+        self._shape_built_for = None
         pv.addStretch(1)
         self.empty = QLabel("Add an element with  Add  — for example a sunset sun or a single beam.")
         self.empty.setObjectName("hint")
@@ -160,20 +225,36 @@ class ElementsTab(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(props)
         scroll.setWidgetResizable(True)
+        self.band_panel = BandNamePanel(ctl)
+        bscroll = QScrollArea()
+        bscroll.setWidget(self.band_panel)
+        bscroll.setWidgetResizable(True)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(scroll)
+        self.stack.addWidget(bscroll)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.addWidget(left)
-        lay.addWidget(scroll, 1)
+        lay.addWidget(self.stack, 1)
         ctl.changed.connect(self._on_changed)
         self.reload()
 
     # ---- model helpers ------------------------------------------------------------------
     @property
     def element(self):
-        return self.ctl.song.element(self.selected_id) if self.selected_id else None
+        return self.ctl.song.element(self.selected_id) if self.selected_id and self.selected_id != LOGO_ID else None
+
+    @property
+    def logo_selected(self) -> bool:
+        return self.selected_id == LOGO_ID
+
+    def select_logo(self):
+        self.select(LOGO_ID)
 
     def select(self, eid: str | None):
+        if eid != self.selected_id:
+            self.selected_shape = None
         self.selected_id = eid
         self._updating = True
         for i in range(self.list.count()):
@@ -248,10 +329,20 @@ class ElementsTab(QWidget):
         self._updating = True
         self.list.clear()
         els = self.ctl.song.elements
-        if self.selected_id and not self.ctl.song.element(self.selected_id):
+        if self.selected_id and self.selected_id != LOGO_ID and not self.ctl.song.element(self.selected_id):
             self.selected_id = None
-        if not self.selected_id and els:
-            self.selected_id = els[0].id
+        if not self.selected_id:
+            self.selected_id = els[0].id if els else LOGO_ID
+        it = QListWidgetItem("★ Band name")
+        it.setData(Qt.ItemDataRole.UserRole, LOGO_ID)
+        it.setToolTip("The band name layer: text, font, layout and timing")
+        it.setForeground(QColor(255, 215, 140))
+        f = QFont(it.font())
+        f.setBold(True)
+        it.setFont(f)
+        self.list.addItem(it)
+        if self.selected_id == LOGO_ID:
+            self.list.setCurrentItem(it)
         for el in els:
             it = QListWidgetItem(el.name)
             it.setData(Qt.ItemDataRole.UserRole, el.id)
@@ -267,6 +358,8 @@ class ElementsTab(QWidget):
     def _on_select(self, cur, _prev):
         if self._updating or cur is None:
             return
+        if cur.data(Qt.ItemDataRole.UserRole) != self.selected_id:
+            self.selected_shape = None
         self.selected_id = cur.data(Qt.ItemDataRole.UserRole)
         self.load_fields()
 
@@ -313,6 +406,11 @@ class ElementsTab(QWidget):
         self._built_for = (el.id, el.type)
 
     def load_fields(self):
+        if self.logo_selected:
+            self.stack.setCurrentIndex(1)
+            self.band_panel.reload()
+            return
+        self.stack.setCurrentIndex(0)
         el = self.element
         self._updating = True
         has = el is not None
@@ -341,7 +439,125 @@ class ElementsTab(QWidget):
                 + (" — each part lights when any of its members does." if n < m else "."))
             self.lbl_parts.setText(share)
         self._updating = False
+        self._load_shapes(el if has and el.type == "custom" else None)
+
+    # ---- custom element shapes ----------------------------------------------------------------
+    def _load_shapes(self, el):
+        self.grp_shapes.setVisible(el is not None)
+        if el is None:
+            return
+        self._updating = True
+        self.shape_list.clear()
+        for i, sh in enumerate(el.shapes):
+            self.shape_list.addItem(f"{i + 1}. {SHAPE_LABELS.get(sh.get('kind'), sh.get('kind'))}")
+        if self.selected_shape is not None and not (0 <= self.selected_shape < len(el.shapes)):
+            self.selected_shape = None
+        if self.selected_shape is None and el.shapes:
+            self.selected_shape = 0
+        if self.selected_shape is not None:
+            self.shape_list.setCurrentRow(self.selected_shape)
+        self._updating = False
+        self._load_shape_fields()
+
+    def _on_shape_row(self, row):
+        if self._updating:
+            return
+        self.selected_shape = row if row >= 0 else None
+        self._load_shape_fields()
+
+    def select_shape(self, idx: int | None):
+        self.selected_shape = idx
+        self._load_shapes(self.element)
+
+    @property
+    def shape(self):
+        el = self.element
+        if el and el.type == "custom" and self.selected_shape is not None and 0 <= self.selected_shape < len(el.shapes):
+            return el.shapes[self.selected_shape]
+        return None
+
+    def _build_shape_form(self, el, idx, sh):
+        if self.shape_box.inner is not None:
+            self.shape_box.inner.setParent(None)
+            self.shape_box.inner.deleteLater()
+        self.shape_box.inner = QWidget()
+        self.shape_box.layout().addWidget(self.shape_box.inner)
+        form = QFormLayout(self.shape_box.inner)
+        self.shape_sliders, self.chk_shape_fill = {}, None
+        for spec in SHAPE_EDIT_FIELDS.get(sh.get("kind"), []):
+            if spec[0] == "filled":
+                cb = QCheckBox("Filled")
+                cb.toggled.connect(lambda v: self._set_shape("filled", v))
+                form.addRow(cb)
+                self.chk_shape_fill = cb
+                continue
+            attr, label, lo, hi, step, fmt = spec
+            sl = LabeledSlider(lo, hi, lo, step, fmt)
+            sl.valueChanged.connect(lambda v, a=attr, w=sl: self._set_shape(a, int(round(v)) if a in INT_ATTRS else v,
+                                                                            reset=w.resetting))
+            add_slider_row(form, label, sl)
+            self.shape_sliders[attr] = sl
+        self._shape_built_for = (el.id, idx, sh.get("kind"))
+
+    def _load_shape_fields(self):
+        el, sh, idx = self.element, self.shape, self.selected_shape
+        self.shape_box.setVisible(sh is not None)
+        if sh is None:
+            return
+        self._updating = True
+        if self._shape_built_for != (el.id, idx, sh.get("kind")):
+            self._build_shape_form(el, idx, sh)
+        defaults = new_shape(sh.get("kind"))
+        for attr, sl in self.shape_sliders.items():
+            sl.set_value(sh.get(attr, defaults[attr]))
+            sl.set_default(defaults[attr])
+        if self.chk_shape_fill is not None:
+            self.chk_shape_fill.setChecked(bool(sh.get("filled")))
+        self._updating = False
+
+    def _set_shape(self, attr, value, reset=False):
+        el, sh = self.element, self.shape
+        if self._updating or sh is None:
+            return
+        sh[attr] = value
+        self._commit(f"{el.id}:shape{self.selected_shape}:{attr}" + (":reset" if reset else ""))
+
+    def add_shape(self, kind):
+        el = self.element
+        if el is None or el.type != "custom":
+            return
+        el.shapes.append(new_shape(kind))
+        self.selected_shape = len(el.shapes) - 1
+        self._commit()
+
+    def duplicate_shape(self):
+        el, sh = self.element, self.shape
+        if sh is None:
+            return
+        c = copy.deepcopy(sh)
+        c["x"] = c.get("x", 0.0) + 0.1
+        el.shapes.insert(self.selected_shape + 1, c)
+        self.selected_shape += 1
+        self._commit()
+
+    def delete_shape(self):
+        el, sh = self.element, self.shape
+        if sh is None:
+            return
+        del el.shapes[self.selected_shape]
+        self.selected_shape = min(self.selected_shape, len(el.shapes) - 1) if el.shapes else None
+        self._commit()
+
+    def move_shape(self, d):
+        el, i = self.element, self.selected_shape
+        if self.shape is None or not (0 <= i + d < len(el.shapes)):
+            return
+        el.shapes[i], el.shapes[i + d] = el.shapes[i + d], el.shapes[i]
+        self.selected_shape = i + d
+        self._commit()
 
     def _on_changed(self, kind):
         if kind in ("all", "elements", "band"):
             self.reload()
+        if kind in ("all", "look") and self.logo_selected:
+            self.band_panel.reload()

@@ -261,35 +261,90 @@ class MainWindow(QMainWindow):
         self.pattern_tab.grid.setFocus()
 
     # ---- element editing on the preview -------------------------------------------------------
+    def _logo_hit(self, x, y) -> bool:
+        """True when (x, y) is on the band name's letters (or their halo)."""
+        r = self.renderer
+        bb = getattr(r, "logo_bbox", None)
+        if not bb or not (bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]) or not r._logo:
+            return False
+        x0, y0, x1, y1, _fill, _tight, _wide, halo = r._logo
+        ix, iy = int(x) - x0, int(y) - y0
+        return 0 <= iy < halo.shape[0] and 0 <= ix < halo.shape[1] and float(halo[iy, ix, 0]) > 0.05
+
     def _canvas_press(self, x, y):
         if not self.renderer:
             return
+        song, et = self.ctl.song, self.elements_tab
+        sel = et.element
+        if sel is not None and sel.type == "custom":   # pick a shape of the selected custom element
+            for i in reversed(range(len(sel.shapes))):
+                bb = self.renderer.shape_bboxes.get((sel.id, i))
+                if bb and bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]:
+                    et.select_shape(i)
+                    sh = sel.shapes[i]
+                    self._el_drag = ("shape", x, y, sh.get("x", 0.0), sh.get("y", 0.0), sel.id, i)
+                    self._dirty = True
+                    return
+        if self._logo_hit(x, y):                  # the band name is drawn on top of the elements
+            et.select_logo()
+            lk = song.look
+            self._el_drag = ("logo", x, y, lk.logo_x, lk.logo_y)
+            self._dirty = True
+            return
         hit = None
-        for el in self.ctl.song.elements:        # list top = front, so first hit wins
+        for el in song.elements:        # list top = front, so first hit wins
             bb = self.renderer.bboxes.get(el.id)
             if el.visible and bb and bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]:
                 hit = el
                 break
         if hit is None:
             return
-        self.elements_tab.select(hit.id)
-        self._el_drag = (hit.id, x, y, hit.x, hit.y)
+        et.select(hit.id)
+        self._el_drag = ("element", x, y, hit.x, hit.y, hit.id)
         self._dirty = True
 
     def _canvas_drag(self, x, y):
         if not self._el_drag or not self.renderer:
             return
-        eid, x0, y0, ex, ey = self._el_drag
-        el = self.ctl.song.element(eid)
-        if el:
-            el.x = min(1.0, max(0.0, ex + (x - x0) / self.renderer.w))
-            el.y = min(1.0, max(0.0, ey + (y - y0) / self.renderer.h))
-            self.ctl.commit("elements", f"{eid}:move")
+        kind, x0, y0, ex, ey = self._el_drag[:5]
+        r, song = self.renderer, self.ctl.song
+        dx, dy = (x - x0) / r.w, (y - y0) / r.h
+        if kind == "logo":
+            song.look.logo_x = min(0.95, max(0.05, ex + dx))
+            song.look.logo_y = min(0.95, max(0.1, ey + dy))
+            self.ctl.commit("look", "logo:move")
+        elif kind == "shape":
+            eid, i = self._el_drag[5:]
+            el = song.element(eid)
+            if el and i < len(el.shapes):
+                # pixel delta -> the element's own (rotated, scaled) units
+                a = math.radians(el.rotation)
+                S = max(1e-6, el.size * r.h)
+                px, py = x - x0, y - y0
+                el.shapes[i]["x"] = round(ex + (px * math.cos(a) + py * math.sin(a)) / S, 3)
+                el.shapes[i]["y"] = round(ey + (-px * math.sin(a) + py * math.cos(a)) / S, 3)
+                self.ctl.commit("elements", f"{eid}:shape{i}:move")
+        else:
+            el = song.element(self._el_drag[5])
+            if el:
+                el.x = min(1.0, max(0.0, ex + dx))
+                el.y = min(1.2, max(0.0, ey + dy))
+                self.ctl.commit("elements", f"{el.id}:move")
 
     def _canvas_wheel(self, d):
-        el = self.elements_tab.element
-        if el:
-            el.size = min(1.0, max(0.02, el.size * (1.06 if d > 0 else 1 / 1.06)))
+        f = 1.06 if d > 0 else 1 / 1.06
+        et = self.elements_tab
+        if et.logo_selected:
+            lk = self.ctl.song.look
+            lk.logo_size = min(0.9, max(0.08, lk.logo_size * f))
+            self.ctl.commit("look", "logo_size")
+            return
+        el, sh = et.element, et.shape
+        if sh is not None:
+            sh["size"] = min(6.0, max(0.01, sh.get("size", 0.5) * f))
+            self.ctl.commit("elements", f"{el.id}:shape{et.selected_shape}:size")
+        elif el:
+            el.size = min(1.5, max(0.02, el.size * f))
             self.ctl.commit("elements", f"{el.id}:size")
 
     def _invalidate_renderer(self):
@@ -409,7 +464,13 @@ class MainWindow(QMainWindow):
         t_frame = self.free_clock.elapsed() / 1000.0 if (eng.preview_pulse and not self.playing) else t
         self.canvas.show_frame(self.renderer.render(eng.state_at(t_frame), self.ctl.song))
         if self.canvas.interactive:
-            self.canvas.selection = self.renderer.bboxes.get(self.elements_tab.selected_id or "")
+            et = self.elements_tab
+            if et.logo_selected:
+                self.canvas.selection = self.renderer.logo_bbox
+            elif et.shape is not None:
+                self.canvas.selection = self.renderer.shape_bboxes.get((et.selected_id, et.selected_shape))
+            else:
+                self.canvas.selection = self.renderer.bboxes.get(et.selected_id or "")
         b = eng.t2b(t)
         bar, beat = bar_of(b)
         self.lbl_time.setText(f"{int(t // 60)}:{t % 60:05.2f}   bar {bar}.{beat}")

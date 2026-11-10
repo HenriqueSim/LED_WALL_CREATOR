@@ -294,7 +294,7 @@ class MotionEngine:
         levels, flash = all_lv, all_fl
 
         logo_lv, logo_peak = lane("fx:logo", 0), lane("fx:logo", 2) * lk.logo_peak
-        logo_level = max(lk.logo_idle, logo_lv)
+        logo_level = max(lk.logo_idle, logo_lv, 1.0 if self.preview_pulse else 0.0)
 
         lyric, lyric_alpha = "", 0.0
         for ly in song.lyrics:

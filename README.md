@@ -16,9 +16,8 @@ tabs below. A typical song goes through them in this order:
    where bar 1 starts. Fix them by hand if needed (½ / ×2 for half or double tempo, *Auto* to go
    back to the detected values). Pick **one colour for the song**: every element and every member
    share it. The *Pastel* swatches suit a soft, sunset look. The same tab holds the global light
-   settings (glow, attack / release, audio reactivity, strobe rate, room for lyrics) and the
-   **band name** layer: text, stacked "vespa. / maia" layout, colour (*Dark cut-out* turns it into
-   a silhouette cut into whatever is behind it), size, and its own fade-in / fade-out and glow peak.
+   settings (glow, attack / release, audio reactivity, strobe rate) and the lyrics settings
+   (room at the top, size, font).
 
 2. **Band: members and groups.** List the members from left to right as they stand on stage, and
    make groups (e.g. *Left side*, *Rhythm section*). Every member and every group gets a lane inside
@@ -26,11 +25,21 @@ tabs below. A typical song goes through them in this order:
 
 3. **Elements: build what is on the wall.** *Add* a preset: **Sunset sun**, **Horizontal beam**,
    **Hexagon / Polygon**, **Ring**, **Single bar**, **Vertical blocks**, **Light shafts** or
-   **Horizon lights**. Each type shows only its own settings, e.g. a hexagon's radius and sides,
+   **Horizon lights**, or build your own: a **Custom** element is made of shapes you combine
+   (lines, dashed lines, rectangles, circles, arcs, polygons, rays). Each shape has its own size,
+   position, angle, thickness and fill. Click a shape in the preview to pick it, drag it to move it
+   and use the wheel to resize it. Each type shows only its own settings, e.g. a hexagon's radius and sides,
    the number of bars, or a beam's segments and parallel lines. In the preview you can click an
    element to select it, drag it to move it and use the mouse wheel to resize it. While you're in
    this tab the preview pulses every element on the beat, so you can see the effect. The checkbox
    next to an element means *available in this project*. The top of the list is the front layer.
+
+   **★ Band name**, at the top of the list, holds the band name layer: the text, the **font**
+   (eight fonts ship with the app so they look the same on every computer, and any installed font
+   works too), the layout (one line, two centred lines, or stacked with the second line shifted
+   right), letter case, colour (*Dark cut-out* turns it into a silhouette cut into whatever is
+   behind it), size and position (or drag it and use the wheel in the preview), and its own fade-in,
+   fade-out and glow peak.
 
    Every element is made of **parts** (a hexagon's sides, the bars, a beam's segments), shared
    out between the members in order. With 6 members and a 6-segment beam, each member has one

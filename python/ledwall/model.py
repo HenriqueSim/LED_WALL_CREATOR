@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 
@@ -59,7 +60,33 @@ ELEMENT_TYPES = [
     ("shafts",  "Light Shafts"),
     ("horizon", "Horizon"),
     ("beam",    "Horizontal Beam / Line"),
+    ("custom",  "Custom (your own shapes)"),
 ]
+
+# building blocks of a custom element
+SHAPE_KINDS = [
+    ("line",    "Line"),
+    ("dashes",  "Dashed line"),
+    ("rect",    "Rectangle"),
+    ("circle",  "Circle"),
+    ("arc",     "Arc / half circle"),
+    ("polygon", "Polygon / triangle"),
+    ("rays",    "Rays"),
+]
+SHAPE_LABELS = dict(SHAPE_KINDS)
+
+
+def new_shape(kind: str, **kw) -> dict:
+    """One shape of a custom element. Positions and sizes are in units of the element's scale
+    (x the wall height), relative to the element's centre."""
+    base = dict(kind=kind, x=0.0, y=0.0, size=0.6, h=0.3, rot=0.0, sides=3, thickness=5.0, filled=False,
+                dashes=8, sweep=180.0)
+    base.update({"line": dict(size=1.0), "dashes": dict(size=1.0, dashes=8), "rect": dict(size=0.8, h=0.5),
+                 "circle": dict(size=0.4), "arc": dict(size=0.6, rot=180.0, sweep=180.0),
+                 "polygon": dict(size=0.5, sides=3), "rays": dict(size=1.0, h=0.55, dashes=9, rot=180.0, sweep=180.0),
+                 }.get(kind, {}))
+    base.update(kw)
+    return base
 ELEMENT_LABELS = dict(ELEMENT_TYPES)
 
 
@@ -152,6 +179,7 @@ class Element:
     lines: int = 1               # beam: parallel lines
     spacing: float = 0.04        # beam: distance between parallel lines (x height)
     preset: str = ""             # preset it was made from (its settings are the reset defaults)
+    shapes: list = field(default_factory=list)   # custom: list of new_shape() dicts, one part each
     core: float = 0.5            # sun: how much the centre glows towards white
     softness: float = 0.025      # sun: edge feather (fraction of the radius)
     cuts: int = 0                # sun: horizontal cut lines near the horizon
@@ -174,13 +202,19 @@ def preset_element(kind: str) -> Element:
                        count=6),
         "horizon": dict(name="Horizon", type="horizon", x=0.5, y=0.84, size=0.9, height=0.6, idle=0.12, count=6),
         "beam": dict(name="Horizontal beam", type="beam", x=0.5, y=0.9, size=0.8, thickness=6, idle=0.2, count=1),
+        "custom": dict(name="Custom element", type="custom", x=0.5, y=0.6, size=0.3, idle=0.15,
+                       shapes=[new_shape("polygon", sides=6, size=0.8, thickness=6)]),
+        "custom_rays": dict(name="Rising rays", type="custom", x=0.5, y=0.97, size=0.55, idle=0.15, glow=0.9,
+                            shapes=[new_shape("arc", size=0.45, thickness=6, rot=180.0, sweep=180.0),
+                                    new_shape("rays", size=1.1, h=0.6, dashes=9, thickness=4),
+                                    new_shape("line", size=3.2, thickness=3)]),
     }
     kind = kind if kind in presets else "polygon"
-    return Element(new_id(), preset=kind, **presets[kind])
+    return Element(new_id(), preset=kind, **copy.deepcopy(presets[kind]))
 
 
 _TYPE_PRESET = {"sun": "sun", "polygon": "polygon", "ring": "ring", "bars": "bars", "shafts": "shafts",
-                "horizon": "horizon", "beam": "beam"}
+                "horizon": "horizon", "beam": "beam", "custom": "custom"}
 
 
 def element_defaults(el: Element) -> Element:
@@ -204,9 +238,15 @@ class Look:
     headroom: float = 0.24                  # top fraction kept free for lyrics
     strobe_rate: int = 4                    # flashes per beat
     # band name layer (stacks on top of any background)
-    logo_text: str = "vespa maia"
-    logo_stacked: bool = True
+    logo_text: str = "band name"
+    logo_stacked: bool = False              # old flag, see logo_layout
+    logo_layout: str = "line"               # line | stacked (2nd line offset right) | two_lines (centred)
+    logo_dot: bool = True                   # stacked: full stop after the first line
+    logo_offset: float = 0.456              # stacked: 2nd line shift (x the first line's width)
+    logo_font: str = "Anton"
+    logo_case: str = "asis"                 # asis | lower | upper
     logo_size: float = 0.40                 # fraction of the wall height
+    logo_x: float = 0.5                     # horizontal centre
     logo_y: float = 0.58                    # vertical centre
     logo_color: str = "accent"              # accent | main | white
     logo_attack_ms: float = 450.0
@@ -216,6 +256,7 @@ class Look:
     logo_glow_radius: float = 38.0
     logo_idle: float = 0.0
     lyrics_size: float = 0.11
+    lyrics_font: str = ""                   # "" = same as the band name
 
 
 @dataclass
@@ -317,10 +358,13 @@ class Song:
         raw_look = d.get("look", {})
         known = {f.name for f in fields(Look)}
         look = Look(**{k: tup(v) for k, v in raw_look.items() if k in known})
+        if "logo_layout" not in raw_look:   # before layouts: the stacked flag
+            look.logo_layout = "stacked" if raw_look.get("logo_stacked", True) else "line"
         ek = {f.name for f in fields(Element)}
         n_mem = max(1, len(d.get("members", [])))
         if "elements" in d:
-            elements = [Element(**{k: tup(v) for k, v in e.items() if k in ek}) for e in d["elements"]]
+            elements = [Element(**{k: (list(v) if k == "shapes" else tup(v)) for k, v in e.items() if k in ek})
+                        for e in d["elements"]]
             for e, raw in zip(elements, d["elements"]):
                 if "count" not in raw:   # before per-element part counts
                     e.count = e.slats * n_mem if e.type == "bars" else n_mem

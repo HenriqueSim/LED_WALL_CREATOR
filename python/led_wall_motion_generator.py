@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-#  LED Wall Motion Generator
+#  LED Wall Creator
 #  DAW-style light programming for LED wall backgrounds, rendered to .mp4
 # =============================================================================
 #
@@ -68,6 +68,17 @@ class App(QApplication):
                 self.pending.append(path)
             return True
         return super().event(ev)
+
+
+def _migrate_settings(org: str):
+    """The app used to be called "LED Wall Motion Generator": carry its settings (recent projects,
+    update choices, project location) over to the new name once."""
+    from PyQt6.QtCore import QSettings
+    new, old = QSettings(org, "LED Wall Creator"), QSettings(org, "LED Wall Motion Generator")
+    if not new.allKeys() and old.allKeys():
+        for k in old.allKeys():
+            new.setValue(k, old.value(k))
+        new.sync()
 
 
 def open_path(win, path: str):
@@ -182,7 +193,9 @@ def main():
         del args[i:i + 3]
     app = App(sys.argv[:1] + args)
     app.setOrganizationName(ORG)
-    app.setApplicationName("LED Wall Motion Generator")
+    _migrate_settings(ORG)
+    app.setApplicationName("LED Wall Creator")
+    app.setDesktopFileName("ledwallcreator")      # Wayland / GNOME: ties the window to the menu entry
     app.setStyle("Fusion")
     from ledwall.resources import load_bundled_fonts
     load_bundled_fonts()

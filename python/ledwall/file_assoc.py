@@ -7,6 +7,7 @@ Re-run on every start so it follows the app when an update installs it in a new 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 
@@ -58,31 +59,58 @@ def _register_windows(exe: str) -> bool:
 
 
 def _register_linux(exe: str) -> bool:
+    """A menu entry that never changes between versions (GNOME caches entries, so rewriting the
+    path on every update left it pointing at the deleted old version): it starts the app through
+    ~/.local/share/ledwallcreator/current, a link updated on every start, and uses a themed icon."""
     share = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     apps, mime_pk = os.path.join(share, "applications"), os.path.join(share, "mime", "packages")
-    desktop = os.path.join(apps, "ledwallcreator.desktop")
-    icon = _icon(".png") or "video-display"
+    home = os.path.join(share, "ledwallcreator")
+    os.makedirs(home, exist_ok=True)
+    current = os.path.join(home, "current")
+    install = os.path.dirname(os.path.realpath(exe))
+    if os.path.realpath(current) != install:            # point the link at this copy (atomically)
+        tmp = current + ".new"
+        if os.path.lexists(tmp):
+            os.remove(tmp)
+        os.symlink(install, tmp)
+        os.replace(tmp, current)
+    changed = False
+    png = _icon(".png")
+    if png:                                             # themed icon: Icon=ledwallcreator
+        dst_dir = os.path.join(share, "icons", "hicolor", "512x512", "apps")
+        dst = os.path.join(dst_dir, "ledwallcreator.png")
+        if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(png):
+            os.makedirs(dst_dir, exist_ok=True)
+            shutil.copyfile(png, dst)
+            changed = True
+    launcher = os.path.join(current, os.path.basename(exe))
     entry = (f"[Desktop Entry]\nType=Application\nName=LED Wall Creator\nComment=Audio-synced LED wall videos\n"
-             f'Exec="{exe}" %f\nIcon={icon}\nTerminal=false\nCategories=AudioVideo;Video;\nMimeType={MIME};\n')
+             f'Exec="{launcher}" %f\nIcon=ledwallcreator\nTerminal=false\nCategories=AudioVideo;Video;\n'
+             f"MimeType={MIME};\nStartupWMClass={os.path.basename(exe)}\nStartupNotify=true\n")
+    desktop = os.path.join(apps, "ledwallcreator.desktop")
     try:
         with open(desktop) as fh:
-            if fh.read() == entry:
-                return True
+            same = fh.read() == entry
     except OSError:
-        pass
-    os.makedirs(apps, exist_ok=True)
-    os.makedirs(mime_pk, exist_ok=True)
-    with open(os.path.join(mime_pk, "ledwallcreator.xml"), "w") as fh:
-        fh.write('<?xml version="1.0" encoding="UTF-8"?>\n'
-                 '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">\n'
-                 f'  <mime-type type="{MIME}">\n    <comment>LED Wall Creator project</comment>\n'
-                 '    <glob pattern="*.ledwall"/>\n  </mime-type>\n</mime-info>\n')
-    with open(desktop, "w") as fh:
-        fh.write(entry)
-    for cmd in (["update-mime-database", os.path.join(share, "mime")], ["update-desktop-database", apps],
-                ["xdg-mime", "default", "ledwallcreator.desktop", MIME]):
-        try:
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        same = False
+    if not same:
+        os.makedirs(apps, exist_ok=True)
+        os.makedirs(mime_pk, exist_ok=True)
+        with open(os.path.join(mime_pk, "ledwallcreator.xml"), "w") as fh:
+            fh.write('<?xml version="1.0" encoding="UTF-8"?>\n'
+                     '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">\n'
+                     f'  <mime-type type="{MIME}">\n    <comment>LED Wall Creator project</comment>\n'
+                     '    <icon name="ledwallcreator"/>\n    <glob pattern="*.ledwall"/>\n  </mime-type>\n</mime-info>\n')
+        with open(desktop + ".new", "w") as fh:
+            fh.write(entry)
+        os.replace(desktop + ".new", desktop)
+        changed = True
+    if changed:
+        for cmd in (["update-mime-database", os.path.join(share, "mime")], ["update-desktop-database", apps],
+                    ["gtk-update-icon-cache", "-f", "-t", os.path.join(share, "icons", "hicolor")],
+                    ["xdg-mime", "default", "ledwallcreator.desktop", MIME]):
+            try:
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
     return True

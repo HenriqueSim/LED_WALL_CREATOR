@@ -39,7 +39,7 @@ try:
 except Exception:  # pragma: no cover
     HAVE_MULTIMEDIA = False
 
-APP_NAME = "LED Wall Motion Generator"
+APP_NAME = "LED Wall Creator"
 
 
 class MainWindow(QMainWindow):

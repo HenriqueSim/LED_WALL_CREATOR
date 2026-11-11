@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 
 from ..audio import FFMPEG
 from ..model import BEATS_PER_BAR
-from .common import hint
+from .common import hint, icon
 
 VIEWS = [("wall", "LED wall only"), ("led", "On stage: LED wall (light from behind the band)"),
          ("projector", "On stage: projector (light from the front)")]
@@ -38,9 +38,11 @@ class ExportTab(QWidget):
         gp = QGroupBox("Watch it")
         fp = QFormLayout(gp)
         prow = QHBoxLayout()
-        self.btn_from_start = QPushButton("▶  Play from the start")
+        self.btn_from_start = QPushButton("Play from the start")
+        self.btn_from_start.setIcon(icon("play"))
         self.btn_from_start.clicked.connect(self.playFromStartRequested.emit)
-        self.btn_play = QPushButton("⏯  Play / pause")
+        self.btn_play = QPushButton("Play / pause")
+        self.btn_play.setIcon(icon("pause"))
         self.btn_play.clicked.connect(self.playToggleRequested.emit)
         prow.addWidget(self.btn_from_start)
         prow.addWidget(self.btn_play)

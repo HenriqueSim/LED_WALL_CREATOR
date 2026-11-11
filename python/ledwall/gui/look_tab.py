@@ -59,7 +59,8 @@ class LookTab(QWidget):
                          ("×2", lambda: self.spin_bpm.setValue(self.spin_bpm.value() * 2)),
                          ("Auto", self._auto_bpm)):
             b = QPushButton(text)
-            b.setFixedWidth(46)
+            b.setFixedWidth(52)
+            b.setProperty("compact", True)
             b.clicked.connect(fn)
             bpm_row.addWidget(b)
         fs.addRow("BPM", bpm_row)
@@ -90,7 +91,7 @@ class LookTab(QWidget):
         self.btn_accent.colorChanged.connect(lambda rgb: self._set("accent_rgb", tuple(rgb)))
         fs.addRow("Accent (flash)", self.btn_accent)
         fs.addRow(hint("One colour per song, shared by every member. The block gradient, the glow and the "
-                       "ambient light are all derived from it."))
+                       "haze are all derived from it."))
 
         # ---- background ----------------------------------------------------------------
         g_bg = QGroupBox("Light && motion (all elements)")

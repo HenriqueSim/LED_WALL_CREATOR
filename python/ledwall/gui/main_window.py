@@ -6,7 +6,7 @@ import json
 import math
 import os
 
-from PyQt6.QtCore import QElapsedTimer, QSettings, Qt, QTimer, QUrl
+from PyQt6.QtCore import QElapsedTimer, QSettings, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices, QFont, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
@@ -22,7 +22,7 @@ from ..model import STEPS_PER_BEAT, Song, default_song
 from ..renderer import FrameRenderer
 from .arrangement import MasterTab
 from .band_tab import BandTab
-from .common import PreviewCanvas
+from .common import PreviewCanvas, icon
 from .elements_tab import ElementsTab
 from .export_tab import ExportTab
 from .stage_window import StageWindow
@@ -83,19 +83,34 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         self.canvas = PreviewCanvas()
         transport = QHBoxLayout()
-        self.btn_play = QPushButton("▶  Play")
-        self.btn_play.setFixedWidth(100)
+        transport.setContentsMargins(2, 8, 2, 4)
+        transport.setSpacing(8)
+        logo = QLabel()
+        from ..resources import ICONS_DIR
+        from PyQt6.QtGui import QPixmap
+        pm = QPixmap(os.path.join(ICONS_DIR, "app.png"))
+        if not pm.isNull():
+            logo.setPixmap(pm.scaled(30, 30, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            transport.addWidget(logo)
+        self.btn_play = QPushButton("Play")
+        self.btn_play.setIcon(icon("play"))
+        self.btn_play.setIconSize(QSize(16, 16))
+        self.btn_play.setObjectName("play")
+        self.btn_play.setFixedWidth(116)
         self.btn_play.clicked.connect(self.toggle_play)
-        btn_home = QPushButton("⏮")
-        btn_home.setFixedWidth(40)
+        btn_home = QPushButton()
+        btn_home.setIcon(icon("skip-back"))
+        btn_home.setIconSize(QSize(16, 16))
+        btn_home.setObjectName("ghost")
+        btn_home.setToolTip("Back to the start (Home)")
         btn_home.clicked.connect(self.go_home)
         for b in (self.btn_play, btn_home):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.lbl_time = QLabel()
-        self.lbl_time.setFont(QFont("Monospace", 11))
-        self.lbl_time.setMinimumWidth(240)
+        self.lbl_time.setObjectName("timecode")
+        self.lbl_time.setMinimumWidth(260)
         self.lbl_mode = QLabel()
-        self.lbl_mode.setStyleSheet("color:#ffb060")
+        self.lbl_mode.setObjectName("modeTag")
         transport.addWidget(self.btn_play)
         transport.addWidget(btn_home)
         transport.addWidget(self.lbl_time)
@@ -103,11 +118,13 @@ class MainWindow(QMainWindow):
         transport.addWidget(self.lbl_mode)
         top = QWidget()
         tl = QVBoxLayout(top)
-        tl.setContentsMargins(4, 4, 4, 0)
+        tl.setContentsMargins(10, 8, 10, 0)
         tl.addWidget(self.canvas, 1)
         tl.addLayout(transport)
 
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().setDrawBase(False)
         self.pattern_tab = PatternTab(self.ctl)
         self.master_tab = MasterTab(self.ctl, lambda: self.current_t, self.seek)
         self.elements_tab = ElementsTab(self.ctl)
@@ -438,7 +455,8 @@ class MainWindow(QMainWindow):
         if self.player and self.ctl.analysis:
             self.player.setPosition(int(self.current_t * 1000))
             self.player.play()
-        self.btn_play.setText("⏸  Pause")
+        self.btn_play.setText("Pause")
+        self.btn_play.setIcon(icon("pause"))
 
     def pause(self):
         if self.playing:
@@ -446,7 +464,8 @@ class MainWindow(QMainWindow):
         self.playing = False
         if self.player:
             self.player.pause()
-        self.btn_play.setText("▶  Play")
+        self.btn_play.setText("Play")
+        self.btn_play.setIcon(icon("play"))
 
     def seek(self, t: float):
         self.current_t = max(0.0, min(t, self.ctl.engine.duration))
@@ -791,6 +810,9 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             ev.ignore()
             return
+        probe = getattr(self.export_tab, "_probe", None)
+        if probe is not None and probe.isRunning():     # the encoder check (a second at most)
+            probe.wait(5000)
         for wk in (self.export_worker, self.audio_worker):
             if wk and wk.isRunning():
                 if isinstance(wk, ExportWorker):

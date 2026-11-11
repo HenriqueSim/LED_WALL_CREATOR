@@ -633,7 +633,8 @@ class TempoBar(QWidget):
                               ("Tap", "Tap along with the music (4+ taps)", self._tap)):
             b = QPushButton(text)
             b.setToolTip(tip)
-            b.setFixedWidth(40 if text != "Tap" else 48)
+            b.setFixedWidth(44 if text != "Tap" else 52)
+            b.setProperty("compact", True)
             b.clicked.connect(fn)
             lay.addWidget(b)
         lay.addSpacing(14)
@@ -649,7 +650,8 @@ class TempoBar(QWidget):
         lay.addWidget(self.spin_off)
         for text, d in (("◀◀", -0.05), ("◀", -0.005), ("▶", 0.005), ("▶▶", 0.05)):
             b = QPushButton(text)
-            b.setFixedWidth(34)
+            b.setFixedWidth(44 if len(text) > 1 else 36)
+            b.setProperty("compact", True)
             b.setToolTip(f"Move the audio {'left' if d < 0 else 'right'} by {abs(d) * 1000:.0f} ms")
             b.clicked.connect(lambda _=False, dd=d: self._nudge(dd))
             lay.addWidget(b)

@@ -33,40 +33,25 @@ class RoomyItemDelegate(QStyledItemDelegate):
         editor.setGeometry(r.x(), r.y() + (r.height() - h) // 2, max(r.width(), 180), h)
 
 
+def icon(name: str):
+    """QIcon from icons/<name>.svg."""
+    import os
+    from PyQt6.QtGui import QIcon
+    from ..resources import ICONS_DIR
+    return QIcon(os.path.join(ICONS_DIR, name + ".svg"))
+
+
 def roomy(list_widget):
     """Apply RoomyItemDelegate to a QListWidget (kept alive by the widget)."""
     list_widget.setItemDelegate(RoomyItemDelegate(list_widget))
     return list_widget
 
-DARK_QSS = """
-QWidget { background: #111; color: #ddd; font-size: 12px; }
-QGroupBox { border: 1px solid #2a2a2a; border-radius: 6px; margin-top: 14px; padding: 8px 6px 6px 6px; }
-QGroupBox::title { subcontrol-origin: margin; left: 8px; color: #ffa040; font-weight: bold; }
-QPushButton { background: #1d1d1d; border: 1px solid #333; border-radius: 4px; padding: 4px 9px; }
-QPushButton:hover { border-color: #ff9a30; }
-QPushButton:checked { background: #5a3208; border-color: #ff9a30; }
-QPushButton:disabled { color: #555; }
-QPushButton#primary { background: #ff8c1a; color: #000; font-weight: bold; border: none; }
-QPushButton#primary:hover { background: #ffa64d; }
-QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background: #1a1a1a; border: 1px solid #333; border-radius: 3px; padding: 3px; }
-QListWidget { background: #161616; border: 1px solid #2a2a2a; }
-QListWidget::item:selected { background: #5a3208; color: #fff; }
-QSlider::groove:horizontal { height: 4px; background: #2a2a2a; border-radius: 2px; }
-QSlider::handle:horizontal { background: #ff9a30; width: 12px; margin: -5px 0; border-radius: 6px; }
-QSlider::sub-page:horizontal { background: #7a4410; border-radius: 2px; }
-QProgressBar { border: 1px solid #333; border-radius: 3px; text-align: center; background: #1a1a1a; }
-QProgressBar::chunk { background: #ff8c1a; }
-QTabWidget::pane { border: 1px solid #2a2a2a; top: -1px; }
-QTabBar::tab { background: #171717; border: 1px solid #2a2a2a; padding: 6px 16px; margin-right: 2px; }
-QTabBar::tab:selected { background: #2a1a08; color: #ffb060; border-bottom-color: #2a1a08; }
-QScrollArea { border: none; }
-QLabel#preview { background: #000; border: 1px solid #222; }
-QLabel#hint { color: #888; }
-QCheckBox::indicator, QListView::indicator { width: 13px; height: 13px; border: 1px solid #777; background: #1a1a1a; border-radius: 2px; }
-QCheckBox::indicator:checked, QListView::indicator:checked { background: #ff8c1a; border-color: #ffb060; }
-QMenuBar { background: #151515; } QMenuBar::item:selected { background: #5a3208; }
-QMenu { background: #1a1a1a; border: 1px solid #333; } QMenu::item:selected { background: #5a3208; }
-"""
+def _dark_qss() -> str:
+    from .theme import qss
+    return qss()
+
+
+DARK_QSS = _dark_qss()
 
 
 class ColorButton(QPushButton):
@@ -88,7 +73,7 @@ class ColorButton(QPushButton):
         r, g, b = self.rgb
         fg = "#000" if (r * 0.3 + g * 0.59 + b * 0.11) > 128 else "#fff"
         self.setText(f"#{r:02X}{g:02X}{b:02X}" if self.show_text else "")
-        self.setStyleSheet(f"background: rgb({r},{g},{b}); color: {fg}; border: 1px solid #444;")
+        self.setStyleSheet(f"background: rgb({r},{g},{b}); color: {fg}; border: 1px solid #3a3f4d; border-radius: 8px;")
 
     def _pick(self):
         c = QColorDialog.getColor(QColor(*self.rgb), self, "Pick colour")

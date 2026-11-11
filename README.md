@@ -40,9 +40,7 @@ tabs below. A typical song goes through them in this order:
    where bar 1 starts. Fix them by hand if needed (½ / ×2 for half or double tempo, *Auto* to go
    back to the detected values). Pick **one colour for the song**: every element and every member
    share it. The *Pastel* swatches suit a soft, sunset look. The same tab holds the global light
-   settings (glow, attack / release, audio reactivity, strobe rate, and the **ambient glow**: the soft
-   wash of the song colour rising from the bottom of the wall, with its intensity (0 = off) and how much
-   it pulses with the music) and the lyrics settings
+   settings (glow, attack / release, audio reactivity, strobe rate) and the lyrics settings
    (room at the top, size, font).
 
 2. **Band: members and groups.** List the members from left to right as they stand on stage, and
@@ -86,7 +84,15 @@ tabs below. A typical song goes through them in this order:
    element the pattern uses is a folder of lanes:
    - **All**: the whole element
    - **one lane per member** and **one per group**: their parts of that element
-   - **Pulse / Chase / Random / Strobe**: motion on that element
+   - **Pulse / Chase / Random / Strobe**: motion on that element. **Effect speed** (left panel)
+     runs them at ¼×, ½×, 1×, 2× or 4× the song tempo in that pattern, for half-time or
+     double-time sections.
+
+   **Haze** is an element too (Elements → Add → Haze): the soft wash of the song colour rising from
+   the bottom of the wall, brighter while the other elements are lit and breathing with the music.
+   It has a single *Haze amount* lane: put a note on it in the patterns where you want haze, and
+   the note's velocity sets how much. Its strength, music pulse, spread and height are set in the
+   Elements tab.
 
    An element is only on the wall while one of its lanes plays, so notes are how you bring
    elements **in and out of the scene**. The **Global** folder holds Sparkle, Flash Peak (an
@@ -129,12 +135,17 @@ tabs below. A typical song goes through them in this order:
    member in Band order, with the audience in front. **On stage: LED wall** lights the band from
    behind (backlit silhouettes, light spilling into the haze and onto the floor). **On stage:
    projector** sends the light from the front: the picture lands on the band and they cast shadows
-   on the screen. *Open big preview window* shows the same view in its own window: F11 or a
+   on the screen. **House lights** adds the venue's own moving lights (the ones you don't
+   control): coloured beams that jump to new positions and colours with the rhythm, with their
+   own amount slider. *Open big preview window* shows the same view in its own window: F11 or a
    double-click for fullscreen, Space to play / pause, Esc to close.
 
    To render, choose 3840×1080, 1920×1080 or a custom size, and 30 or 60 fps.
-   The video covers the loop region if there is one, otherwise the whole song. With ffmpeg
-   installed you get a high-bitrate H.264 file and can include the song's audio.
+   The video covers the loop region if there is one, otherwise the whole song. You get a
+   high-bitrate H.264 file and can include the song's audio. Frames are rendered on several
+   threads and **encoded on the graphics card** when the computer has one the app can use (NVIDIA
+   NVENC, Apple VideoToolbox, Intel Quick Sync, AMD AMF; the Export tab shows which), otherwise
+   on the processor.
 
 Save with **File → Save Project** (Ctrl+S). Undo / redo is Ctrl+Z / Ctrl+Shift+Z.
 

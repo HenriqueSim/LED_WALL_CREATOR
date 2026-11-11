@@ -532,6 +532,7 @@ class PatternTab(QWidget):
         ll.setContentsMargins(4, 4, 4, 4)
         ll.addWidget(QLabel("<b>Patterns</b>"))
         self.list = roomy(QListWidget())
+        self.list.setMinimumHeight(130)
         self.list.currentItemChanged.connect(self._on_select)
         self.list.itemChanged.connect(self._on_rename)
         ll.addWidget(self.list, 1)
@@ -589,10 +590,12 @@ class PatternTab(QWidget):
         btn_fit = QPushButton("Fit pattern to width")
         btn_fit.clicked.connect(lambda: self.grid.fit())
         ll.addWidget(btn_fit)
-        ll.addWidget(hint("Drag on empty cells to draw · drag a note to move · drag its right edge to resize · "
-                          "right-click / double-click deletes · Shift-drag selects · Ctrl+C / X / V / D · "
-                          "arrows nudge · Ctrl+wheel zooms · Ctrl+Z undo · click a folder row to fold it · "
-                          "click / drag the ruler (bar numbers) to move the playhead"))
+        tips = hint("ⓘ  Mouse & keyboard (hover)")
+        tips.setToolTip("Drag on empty cells to draw · drag a note to move · drag its right edge to resize\n"
+                        "Right-click / double-click deletes · Shift-drag selects · Ctrl+C / X / V / D\n"
+                        "Arrows nudge · Ctrl+wheel zooms · Ctrl+Z undo · click a folder row to fold it\n"
+                        "Click / drag the ruler (bar numbers) to move the playhead · double-click a pattern to rename")
+        ll.addWidget(tips)
 
         self.grid = PatternGrid(ctl)
         self.grid.selectionChanged.connect(self._on_grid_selection)

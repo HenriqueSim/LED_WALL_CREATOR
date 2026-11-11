@@ -23,7 +23,10 @@ class RoomyItemDelegate(QStyledItemDelegate):
         ed = QLineEdit(parent)
         ed.setObjectName("inlineEdit")
         f = ed.font()
-        f.setPointSizeF(f.pointSizeF() * 1.15)
+        if f.pointSizeF() > 0:
+            f.setPointSizeF(f.pointSizeF() * 1.15)
+        else:                       # the theme sets sizes in pixels
+            f.setPixelSize(max(15, int(f.pixelSize() * 1.15)))
         ed.setFont(f)
         return ed
 

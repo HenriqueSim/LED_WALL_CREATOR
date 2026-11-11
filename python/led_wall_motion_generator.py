@@ -115,7 +115,7 @@ def selftest() -> int:
         eng = MotionEngine(song, a)
         frame = FrameRenderer(960, 270).render(eng.state_at(2.0), song)
         stage = StageSimulator(640, 360)
-        stage.compose(frame, len(song.members), "led", 2.0)
+        stage.compose(frame, len(song.members), "led", 2.0, house=1.0, beat=4.2, env=0.7)
         stage.compose(frame, len(song.members), "projector", 2.0)
         win = MainWindow()
         win.show()

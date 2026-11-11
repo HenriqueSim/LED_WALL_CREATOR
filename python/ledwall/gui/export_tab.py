@@ -64,18 +64,29 @@ class ExportTab(QWidget):
         self.chk_band.setChecked(True)
         self.chk_audience = QCheckBox("Audience")
         self.chk_audience.setChecked(True)
-        for c in (self.chk_band, self.chk_audience):
+        self.chk_house = QCheckBox("House lights")
+        self.chk_house.setChecked(True)
+        self.chk_house.setToolTip("The venue's own moving lights (not controlled by you): coloured beams that "
+                                  "jump around with the rhythm of the song")
+        for c in (self.chk_band, self.chk_audience, self.chk_house):
             c.toggled.connect(lambda *_: self.viewChanged.emit())
             vrow.addWidget(c)
         vrow.addStretch(1)
         fp.addRow(vrow)
+        self.sld_house = QSlider(Qt.Orientation.Horizontal)
+        self.sld_house.setRange(0, 200)
+        self.sld_house.setValue(100)
+        self.sld_house.valueChanged.connect(lambda *_: self.viewChanged.emit())
+        self.lbl_house = QLabel("House lights")
+        fp.addRow(self.lbl_house, self.sld_house)
         self.btn_window = QPushButton("Open big preview window (F11 = fullscreen)")
         self.btn_window.clicked.connect(self.bigWindowRequested.emit)
         fp.addRow(self.btn_window)
         fp.addRow(hint("The stage view puts the wall behind your band (one silhouette per member, in Band "
                        "order) so you can judge the look before the show. LED wall: the light comes from "
                        "behind and the band is backlit. Projector: the picture comes from the front, lands "
-                       "on the band and they cast shadows on the screen."))
+                       "on the band and they cast shadows on the screen. House lights: the venue's own moving lights, "
+                       "jumping around with the rhythm."))
 
         g = QGroupBox("Render")
         f = QFormLayout(g)
@@ -180,13 +191,16 @@ class ExportTab(QWidget):
         return int(self.combo_fps.currentText())
 
     # ---- playback ----------------------------------------------------------------------------
+    def house(self) -> float:
+        return self.sld_house.value() / 100.0 if self.chk_house.isChecked() else 0.0
+
     def view(self) -> str:
         return self.combo_view.currentData()
 
     def _on_view(self):
         on_stage = self.view() != "wall"
-        self.chk_band.setEnabled(on_stage)
-        self.chk_audience.setEnabled(on_stage)
+        for w in (self.chk_band, self.chk_audience, self.chk_house, self.sld_house):
+            w.setEnabled(on_stage)
         self.viewChanged.emit()
 
     def _on_scrub(self, v):

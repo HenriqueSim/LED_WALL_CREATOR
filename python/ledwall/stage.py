@@ -6,6 +6,9 @@ Two lighting modes:
   "projector"  the image comes from a projector in the audience: it lands on the band too (their
                bodies show the image), the band casts shadows on the screen, the screen's black is
                grey and the beam is visible in the haze
+
+Optional house lights: the venue's own moving heads (not controlled by the band), coloured beams
+through the haze that jump to new random positions and colours with the beat.
 """
 
 from __future__ import annotations
@@ -16,6 +19,21 @@ import cv2
 import numpy as np
 
 AA = cv2.LINE_AA
+
+# house light colours (RGB): saturated club colours plus a cold white
+HOUSE_COLORS = [(255, 40, 160), (40, 200, 255), (60, 80, 255), (255, 150, 30), (255, 40, 40),
+                (60, 255, 140), (180, 60, 255), (230, 235, 255)]
+
+
+def _h01(*k) -> float:
+    """Deterministic pseudo-random 0..1 from integers (same beat -> same look on every replay)."""
+    x = 0
+    for v in k:
+        x = (x * 1000003 + int(v) * 2654435761 + 0x9E3779B9) & 0xFFFFFFFF
+        x ^= x >> 15
+        x = (x * 2246822519) & 0xFFFFFFFF
+        x ^= x >> 13
+    return (x & 0xFFFFFF) / float(0x1000000)
 
 # instrument / pose for each member slot, cycled: on a typical stage the drummer sits in the middle
 ROLES_BY_COUNT = {
@@ -179,7 +197,8 @@ class StageSimulator:
 
     # ---- compose --------------------------------------------------------------------------------
     def compose(self, wall_img: np.ndarray, n_members: int, mode: str = "led", t: float = 0.0,
-                show_band: bool = True, show_audience: bool = True) -> np.ndarray:
+                show_band: bool = True, show_audience: bool = True, house: float = 0.0,
+                beat: float = 0.0, env: float = 0.5) -> np.ndarray:
         W, H = self.w, self.h
         wh, ww = wall_img.shape[:2]
         rect = self.wall_rect(wh / ww)
@@ -254,6 +273,9 @@ class StageSimulator:
                 body = back * 0.05 + 4.0
                 out[by0:by1, bx0:bx1] = o + (body - o) * b3 + back * rim * 0.9
 
+        if house > 0:                   # behind the audience's heads, in front of the stage
+            cv2.add(out, self._house_lights(beat, env, house, deck_top), dst=out)
+
         if show_audience:
             aud, top, ay0 = self.audience_mask()
             # a faint rim on the heads from the stage light
@@ -261,6 +283,59 @@ class StageSimulator:
             o = out[ay0:]
             out[ay0:] = o + (3.0 - o) * aud[..., None] + top[..., None] * (light * 0.5)
         return cv2.convertScaleAbs(out)
+
+    # ---- house lights ------------------------------------------------------------------------------
+    def _house_lights(self, beat: float, env: float, amount: float, deck_top: int) -> np.ndarray:
+        """Moving-head beams through the haze, drawn at 1/4 resolution. Each fixture jumps to a new
+        random aim on some beats (eased), changes colour every bar or two, and flashes on the beat."""
+        W, H = self.w, self.h
+        D = 4
+        sw, sh = max(2, W // D), max(2, H // D)
+        buf = np.zeros((sh, sw, 3), np.float32)
+        bi = int(math.floor(beat))
+        ph = beat - bi
+        kick = math.exp(-ph * 5.0)
+        # fixtures: four on the overhead truss, two on the floor at the sides
+        fixtures = [(0.14, 0.03, 90.0), (0.38, 0.02, 90.0), (0.62, 0.02, 90.0), (0.86, 0.03, 90.0),
+                    (0.02, deck_top / H, -40.0), (0.98, deck_top / H, -140.0)]
+        L = math.hypot(W, H) / D * 1.1
+        flares = []
+        for i, (fx, fy, base) in enumerate(fixtures):
+            seg = bi // 2                                  # a new aim every 2 beats, eased in
+            a0 = base + (_h01(seg - 1, i, 7) - 0.5) * 110.0
+            a1 = base + (_h01(seg, i, 7) - 0.5) * 110.0
+            u = min(1.0, ((beat / 2.0) % 1.0) * 2.2)
+            u = u * u * (3 - 2 * u)
+            ang = math.radians(a0 + (a1 - a0) * u)
+            on = _h01(bi, i, 3) > 0.3                     # some fixtures sit out a beat
+            if not on:
+                continue
+            col = HOUSE_COLORS[int(_h01(bi // 8, i, 11) * len(HOUSE_COLORS)) % len(HOUSE_COLORS)]
+            lvl = amount * (0.35 + 0.65 * kick) * (0.6 + 0.6 * env)
+            sx, sy = fx * sw, fy * sh
+            dx, dy = math.cos(ang), math.sin(ang)
+            nx, ny = -dy, dx
+            # the cone fades along its length: a few quads, dimmer further away; a hot core inside
+            n = 7
+            for spread, gain in ((math.radians(3.0), 48.0), (math.radians(1.1), 70.0)):
+                tn = math.tan(spread)
+                for k in range(n):
+                    d0, d1 = L * k / n, L * (k + 1) / n
+                    w0, w1 = 0.8 + d0 * tn, 0.8 + d1 * tn
+                    quad = np.array([[sx + dx * d0 + nx * w0, sy + dy * d0 + ny * w0],
+                                     [sx + dx * d1 + nx * w1, sy + dy * d1 + ny * w1],
+                                     [sx + dx * d1 - nx * w1, sy + dy * d1 - ny * w1],
+                                     [sx + dx * d0 - nx * w0, sy + dy * d0 - ny * w0]])
+                    f = lvl * gain * (1.0 - k / n) ** 1.3
+                    cv2.fillConvexPoly(buf, np.round(quad * 16).astype(np.int32),
+                                       (col[2] * f / 255.0, col[1] * f / 255.0, col[0] * f / 255.0), AA, 4)
+            flares.append((sx, sy, col, lvl))
+        buf = cv2.GaussianBlur(buf, (0, 0), 1.1)
+        for sx, sy, col, lvl in flares:             # the lens of each fixture
+            c = tuple(min(255.0, v * lvl * 1.4) for v in (col[2], col[1], col[0]))
+            cv2.circle(buf, (int(round(sx * 16)), int(round(sy * 16))), int(3.5 * 16), c, -1, AA, 4)
+        buf = cv2.GaussianBlur(buf, (0, 0), 0.8)
+        return cv2.resize(buf, (W, H), interpolation=cv2.INTER_LINEAR)
 
     def _bbox(self, mask) -> tuple:
         ys, xs = np.nonzero(mask[::4, ::4])

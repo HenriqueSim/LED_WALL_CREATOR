@@ -503,7 +503,8 @@ class MainWindow(QMainWindow):
         frame = rend.render(st, song)
         if sim is not None:
             frame = sim.compose(frame, len(song.members), view, t,
-                                self.export_tab.chk_band.isChecked(), self.export_tab.chk_audience.isChecked())
+                                self.export_tab.chk_band.isChecked(), self.export_tab.chk_audience.isChecked(),
+                                house=self.export_tab.house(), beat=st.beat, env=st.env)
         canvas.show_frame(frame)
 
     def go_home(self):

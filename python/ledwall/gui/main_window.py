@@ -762,18 +762,23 @@ class MainWindow(QMainWindow):
         w, h = self.export_tab.resolution()
         et = self.export_tab
         self.export_worker = ExportWorker(self.ctl.song, self.ctl.analysis, w, h, et.fps(), path,
-                                          et.chk_ffmpeg.isChecked(), et.chk_audio.isChecked(), et.spin_bitrate.value(), self)
+                                          et.chk_ffmpeg.isChecked(), et.chk_audio.isChecked(), et.spin_bitrate.value(), self,
+                                          prefer_gpu=et.chk_gpu.isChecked())
         self.export_worker.progress.connect(lambda v, m: (et.progress.setValue(v), self.statusBar().showMessage(m)))
         self.export_worker.finished_ok.connect(self._on_export_done)
         self.export_worker.failed.connect(self._on_export_failed)
         et.progress.setValue(0)
         et.set_busy(True)
+        self.export_started = QElapsedTimer()
+        self.export_started.start()
         self.tabs.setCurrentWidget(et)
         self.export_worker.start()
 
     def _on_export_done(self, path):
         self.export_tab.set_busy(False)
-        QMessageBox.information(self, "Render complete", f"Video written to:\n{path}")
+        took = self.export_started.elapsed() / 1000 if hasattr(self, "export_started") else 0
+        QMessageBox.information(self, "Render complete", f"Video written to:\n{path}\n\n"
+                                f"{took:.0f} s with {self.export_worker.encoder_label}.")
 
     def _on_export_failed(self, msg):
         self.export_tab.set_busy(False)

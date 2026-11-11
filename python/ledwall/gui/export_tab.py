@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QSpinBox,
     QVBoxLayout, QWidget,
@@ -106,6 +106,15 @@ class ExportTab(QWidget):
         self.chk_ffmpeg.setChecked(FFMPEG is not None)
         self.chk_ffmpeg.setEnabled(FFMPEG is not None)
         f.addRow(self.chk_ffmpeg)
+        self.chk_gpu = QCheckBox("Encode on the graphics card when possible (much faster)")
+        self.chk_gpu.setChecked(True)
+        self.chk_gpu.setEnabled(FFMPEG is not None)
+        self.chk_gpu.toggled.connect(lambda *_: self._probe_encoder())
+        self.chk_ffmpeg.toggled.connect(self.chk_gpu.setEnabled)
+        f.addRow(self.chk_gpu)
+        self.lbl_encoder = QLabel("")
+        self.lbl_encoder.setObjectName("hint")
+        f.addRow("Encoder", self.lbl_encoder)
         self.spin_bitrate = QSpinBox()
         self.spin_bitrate.setRange(4, 200)
         self.spin_bitrate.setValue(40)
@@ -139,6 +148,29 @@ class ExportTab(QWidget):
             self.spin_w.setValue(res[0])
             self.spin_h.setValue(res[1])
         self.resolutionChanged.emit()
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if not self.lbl_encoder.text():
+            self._probe_encoder()
+
+    def _probe_encoder(self):
+        """Find out (in the background, once) which encoder a render will use, and show it."""
+        if FFMPEG is None:
+            self.lbl_encoder.setText("OpenCV (install ffmpeg for H.264 and audio)")
+            return
+        from ..export import pick_encoder, render_threads
+        gpu = self.chk_gpu.isChecked()
+        self.lbl_encoder.setText("checking…")
+
+        class Probe(QThread):
+            done = pyqtSignal(str)
+
+            def run(self_):
+                self_.done.emit(pick_encoder(gpu)[1])
+        self._probe = Probe(self)
+        self._probe.done.connect(lambda name: self.lbl_encoder.setText(f"{name}, {render_threads()} render threads"))
+        self._probe.start()
 
     def resolution(self) -> tuple:
         res = RESOLUTIONS[self.combo_res.currentIndex()][1]

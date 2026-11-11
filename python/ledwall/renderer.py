@@ -50,6 +50,18 @@ def gradient_colors(main_rgb) -> tuple:
     return tuple(c * 255 for c in top), tuple(c * 255 for c in bottom)
 
 
+def blur(img, sigma: float):
+    """Gaussian blur; wide blurs run on a half / quarter size copy (same look, several times faster)."""
+    f = 1
+    while sigma / (f * 2) >= 4.0 and f < 4 and min(img.shape[:2]) // (f * 2) >= 8:
+        f *= 2
+    if f == 1:
+        return cv2.GaussianBlur(img, (0, 0), sigma)
+    h, w = img.shape[:2]
+    small = cv2.resize(img, (max(1, w // f), max(1, h // f)), interpolation=cv2.INTER_AREA)
+    return cv2.resize(cv2.GaussianBlur(small, (0, 0), sigma / f), (w, h), interpolation=cv2.INTER_LINEAR)
+
+
 def _qimage_to_array(img: QImage, w: int, h: int) -> np.ndarray:
     ptr = img.constBits()
     ptr.setsize(img.sizeInBytes())
@@ -74,6 +86,8 @@ class FrameRenderer:
         self._grad_cache: dict = {}
         self._layout_cache: dict = {}
         self._sun_cache: dict = {}
+        self._sun_img_cache: dict = {}
+        self._logo_mix: dict = {}
         self._logo_key = None
         self.logo_bbox = None
         self.logo_drawn = False
@@ -184,10 +198,10 @@ class FrameRenderer:
                 glow_src += soft
 
         sigma = max(0.6, lk.glow_radius * self.s / self.DS * (1.0 + 0.6 * st.bloom))
-        tight = cv2.GaussianBlur(glow_src, (0, 0), sigma * 0.35)
-        wide = cv2.GaussianBlur(glow_src, (0, 0), sigma)
+        tight = blur(glow_src, sigma * 0.35)
+        wide = blur(glow_src, sigma)
         gain = lk.glow_intensity * (1.0 + 0.7 * st.bloom)
-        glow = tight * (1.1 * gain) + wide * (1.9 * gain)
+        glow = cv2.addWeighted(tight, 1.1 * gain, wide, 1.9 * gain, 0.0)
         if any_visible and lk.ambient > 0:
             # ambient wash: a constant base, more while elements are lit, pulsing with the music
             mean_lv = float(st.levels.mean()) if len(st.levels) else 0.0
@@ -365,10 +379,16 @@ class FrameRenderer:
         base = np.array(self.element_rgb(el, lk), np.float32)
         base = base * (1 - f) + np.array(lk.accent_rgb, np.float32) * f
         edge = np.array(_bgr(base * 0.92), np.float32)
-        hot = np.array(_bgr(base * (1 - 0.45) + 255.0 * 0.45), np.float32)
-        hot = edge + (hot - edge) * el.core
-        img = alpha * (edge + (hot - edge) * heat) * bright
-        img = np.clip(img, 0, 255).astype(np.uint8)
+        ckey = (id(maps), tuple(np.round(base, 1)), round(el.core, 3))
+        face = self._sun_img_cache.get(ckey)
+        if face is None:           # the coloured disc at full brightness; per frame it is only scaled
+            if len(self._sun_img_cache) > 48:
+                self._sun_img_cache.clear()
+            hot = np.array(_bgr(base * (1 - 0.45) + 255.0 * 0.45), np.float32)
+            hot = edge + (hot - edge) * el.core
+            face = (alpha * (edge + (hot - edge) * heat)).astype(np.float32)
+            self._sun_img_cache[ckey] = face
+        img = cv2.convertScaleAbs(face, alpha=bright)
         hh, ww = img.shape[:2]
         X0, Y0 = x0 * 2, y0 * 2
         X1, Y1 = min(self.w, X0 + ww * 2), min(self.h, Y0 + hh * 2)
@@ -376,14 +396,20 @@ class FrameRenderer:
         cv2.max(layer[Y0:Y1, X0:X1], big, dst=layer[Y0:Y1, X0:X1])
         if el.glow <= 0:
             return None
-        # halo only outside the disc: quarter-res alpha, blurred, minus the disc itself
-        a = np.zeros((self.sh, self.sw), np.float32)
-        q = cv2.resize(alpha[..., 0], (max(1, ww // 2), max(1, hh // 2)), interpolation=cv2.INTER_AREA)
-        qx, qy = x0 // 2, y0 // 2
-        qh, qw = min(q.shape[0], self.sh - qy), min(q.shape[1], self.sw - qx)
-        a[qy:qy + qh, qx:qx + qw] = q[:qh, :qw]
-        halo = cv2.GaussianBlur(a, (0, 0), max(1.0, R / self.DS * 0.12)) * np.clip((1.0 - a) * 3.0, 0.0, 1.0)
-        return halo[..., None] * (edge * bright * el.glow * 0.9)
+        # halo only outside the disc: quarter-res alpha, blurred, minus the disc itself (shape cached)
+        hkey = ("halo", id(maps), round(R / self.DS * 0.12, 2))
+        halo3 = self._sun_img_cache.get(hkey)
+        if halo3 is None:
+            a = np.zeros((self.sh, self.sw), np.float32)
+            q = cv2.resize(alpha[..., 0], (max(1, ww // 2), max(1, hh // 2)), interpolation=cv2.INTER_AREA)
+            qx, qy = x0 // 2, y0 // 2
+            qh, qw = min(q.shape[0], self.sh - qy), min(q.shape[1], self.sw - qx)
+            a[qy:qy + qh, qx:qx + qw] = q[:qh, :qw]
+            halo = blur(a, max(1.0, R / self.DS * 0.12)) * np.clip((1.0 - a) * 3.0, 0.0, 1.0)
+            halo3 = cv2.merge([halo, halo, halo])
+            self._sun_img_cache[hkey] = halo3
+        k = edge * bright * el.glow * 0.9
+        return cv2.multiply(halo3, (float(k[0]), float(k[1]), float(k[2]), 0.0))
 
     # ---- element: polygon (hexagon) ------------------------------------------------------
     def _draw_polygon(self, layer, el, st, song):
@@ -714,25 +740,42 @@ class FrameRenderer:
         layers = self._logo_layers(lk)
         if layers is None:
             return
-        x0, y0, x1, y1, fill, tight, wide, halo = layers
-        L, P = min(st.logo_level, 1.0), st.logo_peak
+        x0, y0, x1, y1 = layers[:4]
+        L, P = round(min(st.logo_level, 1.0), 2), round(st.logo_peak, 2)
+        col = {"main": lk.main_rgb, "white": (255, 255, 255)}.get(lk.logo_color, lk.accent_rgb)
+        key = (self._logo_key, lk.logo_color, tuple(col), tuple(lk.accent_rgb), L, P)
+        mix = self._logo_mix.get(key)
+        if mix is None:
+            if len(self._logo_mix) > 160:
+                self._logo_mix.clear()
+            mix = self._logo_maps(layers, lk, col, L, P)
+            self._logo_mix[key] = mix
+        mul, add = mix
+        roi = img[y0:y1, x0:x1]
+        out = cv2.multiply(roi, mul, scale=1.0 / 255.0)       # darken (halo / cut-out) ...
+        if add is not None:
+            cv2.add(out, add, dst=out)                       # ... then add the light
+        img[y0:y1, x0:x1] = out
+
+    @staticmethod
+    def _logo_maps(layers, lk, col, L, P):
+        """(multiply, add) uint8 maps of the band name for one level / peak: compositing is then two
+        fast passes per frame."""
+        _x0, _y0, _x1, _y1, fill, tight, wide, halo = layers
         if lk.logo_color == "cutout":   # dark silhouette cut into whatever is behind it (e.g. the sun)
-            roi = img[y0:y1, x0:x1].astype(np.float32)
             k = min(1.0, L + 0.3 * P)
-            roi *= 1.0 - np.clip(fill * 0.94 + tight * 0.25, 0, 1) * k
+            mul = 1.0 - np.clip(fill * 0.94 + tight * 0.25, 0, 1) * k
+            add = None
             if P > 0.003:   # Band Name Light: a rim of accent light around the dark letters
                 rim = np.clip(tight * 0.6 + wide * 0.8 - fill, 0, 1) * P
-                roi += rim * np.array(_bgr(lk.accent_rgb), np.float32)
-                np.clip(roi, 0, 255, out=roi)
-            img[y0:y1, x0:x1] = roi.astype(np.uint8)
-            return
-        col = {"main": lk.main_rgb, "white": (255, 255, 255)}.get(lk.logo_color, lk.accent_rgb)
-        roi = img[y0:y1, x0:x1].astype(np.float32)
-        roi *= 1.0 - halo * 0.88 * min(1.0, L * 1.6 + P)      # dark halo keeps the name readable
-        lum = fill * min(1.0, 0.95 * L + 0.35 * P) + tight * (0.35 * L + 0.6 * P) + wide * (0.25 * L + 0.8 * P)
-        roi += lum * np.array(_bgr(col), np.float32)
-        np.clip(roi, 0, 255, out=roi)
-        img[y0:y1, x0:x1] = roi.astype(np.uint8)
+                add = rim * np.array(_bgr(lk.accent_rgb), np.float32)
+        else:
+            mul = 1.0 - halo * 0.88 * min(1.0, L * 1.6 + P)      # dark halo keeps the name readable
+            lum = fill * min(1.0, 0.95 * L + 0.35 * P) + tight * (0.35 * L + 0.6 * P) + wide * (0.25 * L + 0.8 * P)
+            add = lum * np.array(_bgr(col), np.float32)
+        mul3 = np.clip(np.repeat(mul, 3, axis=2) * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        add3 = None if add is None else np.clip(add + 0.5, 0, 255).astype(np.uint8)
+        return mul3, add3
 
     # ---- lyrics -----------------------------------------------------------------------------------
     def _lyric_layers(self, text: str, lk):
@@ -780,9 +823,17 @@ class FrameRenderer:
         if layers is None:
             return
         x0, y0, x1, y1, fill, glow = layers
-        a = st.lyric_alpha
-        roi = img[y0:y1, x0:x1].astype(np.float32)
-        roi *= 1.0 - glow * 0.8 * a
-        roi += (fill * a + glow * 0.45 * a) * np.array(_bgr(song.look.accent_rgb), np.float32)
-        np.clip(roi, 0, 255, out=roi)
-        img[y0:y1, x0:x1] = roi.astype(np.uint8)
+        a = round(st.lyric_alpha, 2)
+        key = ("lyric", id(layers), a, tuple(song.look.accent_rgb))
+        mix = self._logo_mix.get(key)
+        if mix is None:            # uint8 multiply / add maps, cached per fade step (see _overlay_logo)
+            if len(self._logo_mix) > 160:
+                self._logo_mix.clear()
+            mul = np.repeat(1.0 - glow * 0.8 * a, 3, axis=2)
+            add = (fill * a + glow * 0.45 * a) * np.array(_bgr(song.look.accent_rgb), np.float32)
+            mix = (np.clip(mul * 255.0 + 0.5, 0, 255).astype(np.uint8), np.clip(add + 0.5, 0, 255).astype(np.uint8))
+            self._logo_mix[key] = mix
+        roi = img[y0:y1, x0:x1]
+        out = cv2.multiply(roi, mix[0], scale=1.0 / 255.0)
+        cv2.add(out, mix[1], dst=out)
+        img[y0:y1, x0:x1] = out

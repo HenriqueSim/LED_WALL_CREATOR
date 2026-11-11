@@ -26,10 +26,10 @@ from .renderer import FrameRenderer
 # (ffmpeg encoder, label, extra options) tried in order; the first one that works on this computer wins
 _GPU_ENCODERS = {
     "darwin": [("h264_videotoolbox", "Apple VideoToolbox (graphics chip)", ["-allow_sw", "0"])],
-    "win32": [("h264_nvenc", "NVIDIA NVENC (graphics card)", ["-preset", "p5", "-tune", "hq"]),
+    "win32": [("h264_nvenc", "NVIDIA NVENC (graphics card)", ["-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "18"]),
               ("h264_qsv", "Intel Quick Sync (graphics chip)", ["-preset", "slow"]),
               ("h264_amf", "AMD AMF (graphics card)", ["-quality", "quality"])],
-    "linux": [("h264_nvenc", "NVIDIA NVENC (graphics card)", ["-preset", "p5", "-tune", "hq"]),
+    "linux": [("h264_nvenc", "NVIDIA NVENC (graphics card)", ["-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "18"]),
               ("h264_qsv", "Intel Quick Sync (graphics chip)", ["-preset", "slow"])],
 }
 _SOFTWARE = ("libx264", "x264 (processor)", ["-preset", "medium"])

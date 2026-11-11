@@ -33,7 +33,13 @@ jobs:
 
       - name: Linux system libraries for Qt
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libpulse0 libfontconfig1
+        run: |
+          # retried: the package mirrors fail now and then
+          for i in 1 2 3 4; do
+            sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libpulse0 libfontconfig1 && exit 0
+            echo "apt failed, retrying in 20 s"; sleep 20
+          done
+          exit 1
 
       - name: Install
         run: pip install -r requirements.txt pyinstaller

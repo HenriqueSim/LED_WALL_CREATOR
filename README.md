@@ -245,3 +245,7 @@ python/
     gui/           one module per tab + the main window
 docs/reference/    design references (logo layout, vertical blocks)
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE). The bundled fonts are under the SIL Open Font License (see `python/fonts/`).

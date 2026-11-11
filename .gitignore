@@ -7,8 +7,9 @@ python/.venv/
 __pycache__/
 *.pyc
 
-# renders
+# renders (the website's demo videos are kept)
 *.mp4
+!website/media/*.mp4
 
 # app builds
 python/build/

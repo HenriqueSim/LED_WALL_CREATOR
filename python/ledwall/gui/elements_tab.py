@@ -82,9 +82,10 @@ SHAPE_EDIT_FIELDS = {
 LIGHT_FIELDS = {
     "haze": [("glow", "Strength", 0, 8, 0.05, "{:.2f}"), ("music", "Music pulse", 0, 4, 0.05, "{:.2f}")],
     "sun": [("glow", "Halo", 0, 3, 0.05, "{:.2f}"), ("idle", "Resting brightness", 0, 1, 0.01, "{:.2f}"),
-            ("react_scale", "Breathing", 0, 0.1, 0.002, "{:.3f}")],
+            ("react_scale", "Breathing", 0, 0.1, 0.002, "{:.3f}"), ("haze", "Haze around it", 0, 2, 0.02, "{:.2f}")],
 }
-DEFAULT_LIGHT = [("glow", "Glow", 0, 3, 0.05, "{:.2f}"), ("idle", "Idle glow in scene", 0, 1, 0.01, "{:.2f}")]
+DEFAULT_LIGHT = [("glow", "Glow", 0, 3, 0.05, "{:.2f}"), ("idle", "Idle glow in scene", 0, 1, 0.01, "{:.2f}"),
+                 ("haze", "Haze around it", 0, 2, 0.02, "{:.2f}")]
 PARTS_HINT = {
     "sun": "One part: lit by the brightest of its lanes.",
     "haze": "No parts: put notes on its Haze amount lane in a pattern to bring it in (velocity = how much "

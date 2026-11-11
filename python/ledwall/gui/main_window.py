@@ -810,9 +810,6 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             ev.ignore()
             return
-        probe = getattr(self.export_tab, "_probe", None)
-        if probe is not None and probe.isRunning():     # the encoder check (a second at most)
-            probe.wait(5000)
         for wk in (self.export_worker, self.audio_worker):
             if wk and wk.isRunning():
                 if isinstance(wk, ExportWorker):

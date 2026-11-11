@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QSpinBox,
     QVBoxLayout, QWidget,
@@ -28,6 +28,7 @@ class ExportTab(QWidget):
     scrubbed = pyqtSignal(float)          # seconds
     viewChanged = pyqtSignal()
     bigWindowRequested = pyqtSignal()
+    encoderFound = pyqtSignal(str)
 
     def __init__(self, ctl, parent=None):
         super().__init__(parent)
@@ -126,6 +127,7 @@ class ExportTab(QWidget):
         self.chk_ffmpeg.toggled.connect(self.chk_gpu.setEnabled)
         f.addRow(self.chk_gpu)
         self.lbl_encoder = QLabel("")
+        self.encoderFound.connect(self.lbl_encoder.setText)
         self.lbl_encoder.setObjectName("hint")
         f.addRow("Encoder", self.lbl_encoder)
         self.spin_bitrate = QSpinBox()
@@ -176,14 +178,11 @@ class ExportTab(QWidget):
         gpu = self.chk_gpu.isChecked()
         self.lbl_encoder.setText("checking…")
 
-        class Probe(QThread):
-            done = pyqtSignal(str)
-
-            def run(self_):
-                self_.done.emit(pick_encoder(gpu)[1])
-        self._probe = Probe(self)
-        self._probe.done.connect(lambda name: self.lbl_encoder.setText(f"{name}, {render_threads()} render threads"))
-        self._probe.start()
+        # a plain daemon thread: it can never block or crash the app on exit; the result comes back
+        # through a queued signal
+        import threading
+        threading.Thread(target=lambda: self.encoderFound.emit(f"{pick_encoder(gpu)[1]}, {render_threads()} render threads"),
+                         daemon=True).start()
 
     def resolution(self) -> tuple:
         res = RESOLUTIONS[self.combo_res.currentIndex()][1]

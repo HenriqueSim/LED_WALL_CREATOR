@@ -197,10 +197,17 @@ class FrameRenderer:
             g = el.glow * (0.45 if el.fill != "outline" and el.type in ("polygon", "ring") else 1.0)
             if el.type == "sun":
                 g = 0.0                                # the sun brings its own halo (soft) so its face keeps its colour  # big fills bloom less
+            hz = getattr(el, "haze", 0.0)
+            small = None
+            if g > 0 or hz > 0:
+                small = cv2.resize(layer, (self.sw, self.sh), interpolation=cv2.INTER_AREA).astype(np.float32)
             if g > 0:
-                glow_src += cv2.resize(layer, (self.sw, self.sh), interpolation=cv2.INTER_AREA).astype(np.float32) * g
+                glow_src += small * g
             if soft is not None:
                 glow_src += soft
+            if hz > 0:
+                h = self._element_haze(small, hz)
+                wash = h if wash is None else cv2.add(wash, h)
 
         sigma = max(0.6, lk.glow_radius * self.s / self.DS * (1.0 + 0.6 * st.bloom))
         tight = blur(glow_src, sigma * 0.35)
@@ -224,6 +231,15 @@ class FrameRenderer:
         if st.lyric and st.lyric_alpha > 0.003:
             self._overlay_lyric(out, st, song)
         return out
+
+    def _element_haze(self, small, amount: float):
+        """The haze an element lights around itself: its lit parts (1/4 res) spread into a wide, soft
+        cloud of their own colour. One amount sets both how far it spreads and how bright it is."""
+        a = min(max(amount, 0.0), 2.0)
+        sigma = self.sh * (0.035 + 0.05 * a)                 # spread grows with the amount
+        cloud = blur(small, sigma)
+        gain = 9.0 * a * (sigma / (self.sh * 0.06))          # make up for the energy a wide blur spreads out
+        return cv2.multiply(cloud, (gain, gain, gain, 0.0))
 
     # ---- element: haze -----------------------------------------------------------------------
     def _haze(self, el, st: FrameState, song: Song):

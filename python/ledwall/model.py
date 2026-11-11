@@ -191,6 +191,7 @@ class Element:
     softness: float = 0.025      # sun: edge feather (fraction of the radius)
     cuts: int = 0                # sun: horizontal cut lines near the horizon
     music: float = 1.0           # haze: how much it breathes with the music's loudness
+    haze: float = 0.0            # haze this element lights around itself (spread + intensity)
 
 
 def preset_element(kind: str) -> Element:
@@ -220,7 +221,9 @@ def preset_element(kind: str) -> Element:
                                     new_shape("line", size=3.2, thickness=3)]),
     }
     kind = kind if kind in presets else "polygon"
-    return Element(new_id(), preset=kind, **copy.deepcopy(presets[kind]))
+    spec = copy.deepcopy(presets[kind])
+    spec.setdefault("haze", 0.0 if kind in ("haze", "sun") else 0.35)   # new elements light the air a little
+    return Element(new_id(), preset=kind, **spec)
 
 
 _TYPE_PRESET = {"sun": "sun", "polygon": "polygon", "ring": "ring", "bars": "bars", "shafts": "shafts",

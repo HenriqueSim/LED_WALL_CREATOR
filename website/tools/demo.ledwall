@@ -1,0 +1,848 @@
+{
+ "members": [
+  {
+   "id": "620489c4",
+   "name": "Member 1"
+  },
+  {
+   "id": "c1afe390",
+   "name": "Member 2"
+  },
+  {
+   "id": "a38dfad7",
+   "name": "Member 3"
+  },
+  {
+   "id": "318ab314",
+   "name": "Member 4"
+  },
+  {
+   "id": "7fbc6e87",
+   "name": "Member 5"
+  },
+  {
+   "id": "546660ca",
+   "name": "Member 6"
+  }
+ ],
+ "groups": [
+  {
+   "id": "c4d1c848",
+   "name": "Left side",
+   "members": [
+    "620489c4",
+    "c1afe390",
+    "a38dfad7"
+   ]
+  },
+  {
+   "id": "6ed31636",
+   "name": "Right side",
+   "members": [
+    "318ab314",
+    "7fbc6e87",
+    "546660ca"
+   ]
+  }
+ ],
+ "patterns": [
+  {
+   "id": "17d381f4",
+   "name": "Groove",
+   "bars": 1,
+   "color": [
+    255,
+    170,
+    60
+   ],
+   "notes": [
+    {
+     "lane": "e:7f255ccc|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.85
+    },
+    {
+     "lane": "e:700aaf42|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.8
+    },
+    {
+     "lane": "e:7477a675|pulse",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.85
+    },
+    {
+     "lane": "e:d0fa1747|random",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.45
+    },
+    {
+     "lane": "fx:logo_glow",
+     "start": 0,
+     "length": 2,
+     "velocity": 0.8
+    }
+   ],
+   "elements": [
+    "7f255ccc",
+    "700aaf42",
+    "7477a675",
+    "d0fa1747"
+   ],
+   "fx_speed": 1.0
+  },
+  {
+   "id": "751c1cda",
+   "name": "Breakdown (half time)",
+   "bars": 3,
+   "color": [
+    90,
+    170,
+    255
+   ],
+   "notes": [
+    {
+     "lane": "e:7f255ccc|pulse",
+     "start": 0,
+     "length": 48,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:700aaf42|all",
+     "start": 0,
+     "length": 48,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:01b16c37|all",
+     "start": 4,
+     "length": 12,
+     "velocity": 0.25
+    },
+    {
+     "lane": "e:01b16c37|all",
+     "start": 16,
+     "length": 16,
+     "velocity": 0.5
+    },
+    {
+     "lane": "e:01b16c37|all",
+     "start": 32,
+     "length": 12,
+     "velocity": 0.8
+    },
+    {
+     "lane": "e:de08f71b|chase",
+     "start": 16,
+     "length": 28,
+     "velocity": 0.9
+    },
+    {
+     "lane": "fx:logo_glow",
+     "start": 32,
+     "length": 12,
+     "velocity": 1.0
+    },
+    {
+     "lane": "fx:blackout",
+     "start": 44,
+     "length": 4,
+     "velocity": 1.0
+    }
+   ],
+   "elements": [
+    "7f255ccc",
+    "700aaf42",
+    "01b16c37",
+    "de08f71b"
+   ],
+   "fx_speed": 0.5
+  },
+  {
+   "id": "e5600a6e",
+   "name": "Drop",
+   "bars": 1,
+   "color": [
+    255,
+    90,
+    120
+   ],
+   "notes": [
+    {
+     "lane": "fx:flash",
+     "start": 0,
+     "length": 1,
+     "velocity": 1.0
+    },
+    {
+     "lane": "fx:sparkle",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.9
+    },
+    {
+     "lane": "fx:logo_glow",
+     "start": 0,
+     "length": 1,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7f255ccc|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.8
+    },
+    {
+     "lane": "e:700aaf42|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7477a675|chase",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:01b16c37|pulse",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:d0fa1747|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.55
+    },
+    {
+     "lane": "e:de08f71b|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.85
+    }
+   ],
+   "elements": [
+    "7f255ccc",
+    "700aaf42",
+    "7477a675",
+    "01b16c37",
+    "d0fa1747",
+    "de08f71b"
+   ],
+   "fx_speed": 2.0
+  },
+  {
+   "id": "9dd38a92",
+   "name": "Chorus",
+   "bars": 1,
+   "color": [
+    255,
+    200,
+    90
+   ],
+   "notes": [
+    {
+     "lane": "e:7f255ccc|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.8
+    },
+    {
+     "lane": "e:700aaf42|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.9
+    },
+    {
+     "lane": "e:01b16c37|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.75
+    },
+    {
+     "lane": "e:d0fa1747|chase",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.6
+    },
+    {
+     "lane": "e:de08f71b|pulse",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.7
+    },
+    {
+     "lane": "fx:sparkle",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.35
+    },
+    {
+     "lane": "e:7477a675|g:c4d1c848",
+     "start": 0,
+     "length": 4,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7477a675|g:6ed31636",
+     "start": 4,
+     "length": 4,
+     "velocity": 1.0
+    },
+    {
+     "lane": "fx:logo_glow",
+     "start": 0,
+     "length": 1,
+     "velocity": 0.9
+    },
+    {
+     "lane": "e:7477a675|g:c4d1c848",
+     "start": 8,
+     "length": 4,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7477a675|g:6ed31636",
+     "start": 12,
+     "length": 4,
+     "velocity": 1.0
+    },
+    {
+     "lane": "fx:logo_glow",
+     "start": 8,
+     "length": 1,
+     "velocity": 0.9
+    }
+   ],
+   "elements": [
+    "7f255ccc",
+    "700aaf42",
+    "7477a675",
+    "01b16c37",
+    "d0fa1747",
+    "de08f71b"
+   ],
+   "fx_speed": 1.0
+  },
+  {
+   "id": "85278e98",
+   "name": "Build (double time)",
+   "bars": 1,
+   "color": [
+    120,
+    230,
+    140
+   ],
+   "notes": [
+    {
+     "lane": "e:7f255ccc|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.9
+    },
+    {
+     "lane": "e:700aaf42|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7477a675|strobe",
+     "start": 8,
+     "length": 8,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7477a675|chase",
+     "start": 0,
+     "length": 8,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:01b16c37|random",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:d0fa1747|chase",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.65
+    },
+    {
+     "lane": "e:de08f71b|random",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.8
+    },
+    {
+     "lane": "fx:logo_glow",
+     "start": 8,
+     "length": 8,
+     "velocity": 1.0
+    }
+   ],
+   "elements": [
+    "7f255ccc",
+    "700aaf42",
+    "7477a675",
+    "01b16c37",
+    "d0fa1747",
+    "de08f71b"
+   ],
+   "fx_speed": 2.0
+  },
+  {
+   "id": "ed973dac",
+   "name": "Peak",
+   "bars": 1,
+   "color": [
+    200,
+    120,
+    255
+   ],
+   "notes": [
+    {
+     "lane": "fx:flash",
+     "start": 0,
+     "length": 1,
+     "velocity": 1.0
+    },
+    {
+     "lane": "fx:sparkle",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.6
+    },
+    {
+     "lane": "fx:logo_glow",
+     "start": 0,
+     "length": 1,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7f255ccc|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.8
+    },
+    {
+     "lane": "e:700aaf42|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:7477a675|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:01b16c37|pulse",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    },
+    {
+     "lane": "e:d0fa1747|random",
+     "start": 0,
+     "length": 16,
+     "velocity": 0.65
+    },
+    {
+     "lane": "e:de08f71b|all",
+     "start": 0,
+     "length": 16,
+     "velocity": 1.0
+    }
+   ],
+   "elements": [
+    "7f255ccc",
+    "700aaf42",
+    "7477a675",
+    "01b16c37",
+    "d0fa1747",
+    "de08f71b"
+   ],
+   "fx_speed": 1.0
+  }
+ ],
+ "clips": [
+  {
+   "id": "22fa9714",
+   "pattern_id": "17d381f4",
+   "track": 0,
+   "start": 76.0,
+   "length": 4.0
+  },
+  {
+   "id": "7ea2484a",
+   "pattern_id": "751c1cda",
+   "track": 0,
+   "start": 80.0,
+   "length": 12.0
+  },
+  {
+   "id": "7817edd0",
+   "pattern_id": "e5600a6e",
+   "track": 0,
+   "start": 92.0,
+   "length": 4.0
+  },
+  {
+   "id": "0a1876a8",
+   "pattern_id": "9dd38a92",
+   "track": 0,
+   "start": 96.0,
+   "length": 12.0
+  },
+  {
+   "id": "39e825e3",
+   "pattern_id": "85278e98",
+   "track": 0,
+   "start": 108.0,
+   "length": 4.0
+  },
+  {
+   "id": "13612d1a",
+   "pattern_id": "ed973dac",
+   "track": 0,
+   "start": 112.0,
+   "length": 4.0
+  }
+ ],
+ "lyrics": [
+  {
+   "id": "4b5825f7",
+   "text": "made for the stage",
+   "start": 82,
+   "length": 9.5
+  }
+ ],
+ "elements": [
+  {
+   "id": "de08f71b",
+   "name": "Rising rays",
+   "type": "custom",
+   "visible": true,
+   "driver": "members",
+   "x": 0.5,
+   "y": 0.985,
+   "size": 0.5,
+   "height": 0.7,
+   "rotation": 0.0,
+   "spin": 0.0,
+   "sides": 6,
+   "thickness": 5.0,
+   "fill": "outline",
+   "color": "main",
+   "custom_rgb": [
+    255,
+    255,
+    255
+   ],
+   "glow": 0.9,
+   "idle": 0.0,
+   "react_scale": 0.08,
+   "slats": 3,
+   "count": 6,
+   "gap": 0.28,
+   "lines": 1,
+   "spacing": 0.04,
+   "preset": "custom_rays",
+   "shapes": [
+    {
+     "kind": "arc",
+     "x": 0.0,
+     "y": 0.0,
+     "size": 0.45,
+     "h": 0.3,
+     "rot": 180.0,
+     "sides": 3,
+     "thickness": 6,
+     "filled": false,
+     "dashes": 8,
+     "sweep": 180.0
+    },
+    {
+     "kind": "rays",
+     "x": 0.0,
+     "y": 0.0,
+     "size": 1.1,
+     "h": 0.6,
+     "rot": 180.0,
+     "sides": 3,
+     "thickness": 4,
+     "filled": false,
+     "dashes": 9,
+     "sweep": 180.0
+    },
+    {
+     "kind": "line",
+     "x": 0.0,
+     "y": 0.0,
+     "size": 3.2,
+     "h": 0.3,
+     "rot": 0.0,
+     "sides": 3,
+     "thickness": 3,
+     "filled": false,
+     "dashes": 8,
+     "sweep": 180.0
+    }
+   ],
+   "core": 0.5,
+   "softness": 0.025,
+   "cuts": 0,
+   "music": 1.0,
+   "haze": 0.35
+  },
+  {
+   "id": "7477a675",
+   "name": "Horizontal beam",
+   "type": "beam",
+   "visible": true,
+   "driver": "members",
+   "x": 0.5,
+   "y": 0.93,
+   "size": 0.86,
+   "height": 0.7,
+   "rotation": 0.0,
+   "spin": 0.0,
+   "sides": 6,
+   "thickness": 6,
+   "fill": "outline",
+   "color": "main",
+   "custom_rgb": [
+    255,
+    255,
+    255
+   ],
+   "glow": 1.0,
+   "idle": 0.15,
+   "react_scale": 0.08,
+   "slats": 3,
+   "count": 6,
+   "gap": 0.28,
+   "lines": 1,
+   "spacing": 0.04,
+   "preset": "beam",
+   "shapes": [],
+   "core": 0.5,
+   "softness": 0.025,
+   "cuts": 0,
+   "music": 1.0,
+   "haze": 0.7
+  },
+  {
+   "id": "01b16c37",
+   "name": "Main hexagon",
+   "type": "polygon",
+   "visible": true,
+   "driver": "members",
+   "x": 0.5,
+   "y": 0.58,
+   "size": 0.4,
+   "height": 0.7,
+   "rotation": 0.0,
+   "spin": 3.0,
+   "sides": 6,
+   "thickness": 5,
+   "fill": "outline",
+   "color": "accent",
+   "custom_rgb": [
+    255,
+    255,
+    255
+   ],
+   "glow": 1.3,
+   "idle": 0.0,
+   "react_scale": 0.08,
+   "slats": 3,
+   "count": 6,
+   "gap": 0.28,
+   "lines": 1,
+   "spacing": 0.04,
+   "preset": "hexagon",
+   "shapes": [],
+   "core": 0.5,
+   "softness": 0.025,
+   "cuts": 0,
+   "music": 1.0,
+   "haze": 0.45
+  },
+  {
+   "id": "7f255ccc",
+   "name": "Sun",
+   "type": "sun",
+   "visible": true,
+   "driver": "members",
+   "x": 0.5,
+   "y": 1.0,
+   "size": 0.58,
+   "height": 0.7,
+   "rotation": 0.0,
+   "spin": 0.0,
+   "sides": 6,
+   "thickness": 5.0,
+   "fill": "outline",
+   "color": "main",
+   "custom_rgb": [
+    255,
+    255,
+    255
+   ],
+   "glow": 0.35,
+   "idle": 0.5,
+   "react_scale": 0.012,
+   "slats": 3,
+   "count": 6,
+   "gap": 0.28,
+   "lines": 1,
+   "spacing": 0.04,
+   "preset": "sun",
+   "shapes": [],
+   "core": 0.55,
+   "softness": 0.025,
+   "cuts": 0,
+   "music": 1.0,
+   "haze": 0.0
+  },
+  {
+   "id": "d0fa1747",
+   "name": "Vertical blocks",
+   "type": "bars",
+   "visible": true,
+   "driver": "members",
+   "x": 0.5,
+   "y": 1.0,
+   "size": 0.98,
+   "height": 0.36,
+   "rotation": 0.0,
+   "spin": 0.0,
+   "sides": 6,
+   "thickness": 2,
+   "fill": "gradient",
+   "color": "main",
+   "custom_rgb": [
+    255,
+    255,
+    255
+   ],
+   "glow": 0.12,
+   "idle": 0.0,
+   "react_scale": 0.08,
+   "slats": 3,
+   "count": 16,
+   "gap": 0.9,
+   "lines": 1,
+   "spacing": 0.04,
+   "preset": "bars",
+   "shapes": [],
+   "core": 0.5,
+   "softness": 0.025,
+   "cuts": 0,
+   "music": 1.0,
+   "haze": 0.15
+  },
+  {
+   "id": "700aaf42",
+   "name": "Haze",
+   "type": "haze",
+   "visible": true,
+   "driver": "members",
+   "x": 0.5,
+   "y": 1.0,
+   "size": 0.55,
+   "height": 0.38,
+   "rotation": 0.0,
+   "spin": 0.0,
+   "sides": 6,
+   "thickness": 5.0,
+   "fill": "outline",
+   "color": "main",
+   "custom_rgb": [
+    255,
+    255,
+    255
+   ],
+   "glow": 2.2,
+   "idle": 0.0,
+   "react_scale": 0.08,
+   "slats": 3,
+   "count": 6,
+   "gap": 0.28,
+   "lines": 1,
+   "spacing": 0.04,
+   "preset": "haze",
+   "shapes": [],
+   "core": 0.5,
+   "softness": 0.025,
+   "cuts": 0,
+   "music": 1.0,
+   "haze": 0.0
+  }
+ ],
+ "look": {
+  "main_rgb": [
+   255,
+   168,
+   118
+  ],
+  "accent_rgb": [
+   176,
+   120,
+   255
+  ],
+  "glow_radius": 26.0,
+  "glow_intensity": 0.75,
+  "attack_ms": 30.0,
+  "release_ms": 380.0,
+  "audio_react": 0.35,
+  "sensitivity": 0.55,
+  "headroom": 0.24,
+  "strobe_rate": 4,
+  "ambient": 0.0,
+  "ambient_pulse": 1.0,
+  "logo_text": "your band",
+  "logo_stacked": false,
+  "logo_layout": "line",
+  "logo_dot": true,
+  "logo_offset": 0.456,
+  "logo_font": "Anton",
+  "logo_case": "asis",
+  "logo_size": 0.27,
+  "logo_x": 0.5,
+  "logo_y": 0.6,
+  "logo_color": "cutout",
+  "logo_attack_ms": 450.0,
+  "logo_release_ms": 1600.0,
+  "logo_peak": 1.4,
+  "logo_peak_decay_ms": 700.0,
+  "logo_glow_radius": 38.0,
+  "logo_idle": 0.0,
+  "logo_always": true,
+  "logo_glow": 1.2,
+  "logo_glow_attack_ms": 120.0,
+  "logo_glow_release_ms": 700.0,
+  "lyrics_size": 0.09,
+  "lyrics_font": ""
+ },
+ "bpm": 129.19921875,
+ "beat_offset": 0.278639455782313,
+ "audio_path": "Percussion Drums Sport by Infraction [No Copyright Music] Percussion Intro.mp3",
+ "region": [
+  35.57297052154195,
+  54.14893424036281
+ ],
+ "loop": true,
+ "version": 6
+}

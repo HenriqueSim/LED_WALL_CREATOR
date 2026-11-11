@@ -191,6 +191,8 @@ def main():
         except (IndexError, ValueError):
             pass
         del args[i:i + 3]
+    from ledwall.resources import set_windows_app_id
+    set_windows_app_id()
     app = App(sys.argv[:1] + args)
     app.setOrganizationName(ORG)
     _migrate_settings(ORG)
@@ -212,8 +214,10 @@ def main():
     if files:
         open_path(win, files[0])
     if getattr(sys, "frozen", False):
-        from ledwall.file_assoc import register
-        register()
+        from ledwall.updater import is_installed
+        if not is_installed():      # the Windows installer registers .ledwall itself (and removes it on uninstall)
+            from ledwall.file_assoc import register
+            register()
     if finish:
         from ledwall.gui.update_dialog import FinishUpdateWorker, report_finished_update
         worker = FinishUpdateWorker(*finish, parent=win)

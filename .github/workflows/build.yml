@@ -1,4 +1,4 @@
-# Builds the standalone app for Windows, macOS and Linux, runs its self-test on each,
+# Builds the standalone app for Windows (installer + portable zip), macOS and Linux, runs its self-test on each,
 # and publishes them as a GitHub Release when a version tag (v1.2.3) is pushed.
 # Can also be started by hand from the Actions tab (the builds are then kept as artifacts).
 name: Build apps
@@ -63,6 +63,38 @@ jobs:
           Get-Content selftest.log
           if ($p.ExitCode -ne 0) { Get-Content selftest.log -Tail 25 | ForEach-Object { Write-Output "::error::$_" }; exit 1 }
 
+      - name: Windows installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $v = (Select-String -Path ledwall/version.py -Pattern '__version__ = "(.*)"').Matches[0].Groups[1].Value
+          & $iscc /Qp "/DAppVersion=$v" installer\LEDWallCreator.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Installer test (install, self-test, uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "C:\lwc-installer-test"
+          $p = Start-Process dist\LEDWallCreator-Setup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$dir","/TASKS=desktopicon" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Output "::error::Setup exited with $($p.ExitCode)"; exit 1 }
+          foreach ($f in "$dir\LEDWallCreator.exe", "$dir\unins000.exe", "$env:PUBLIC\Desktop\LED Wall Creator.lnk") {
+            if (-not (Test-Path $f)) { Write-Output "::error::Missing after install: $f"; exit 1 }
+          }
+          $assoc = (Get-ItemProperty "HKLM:\Software\Classes\LEDWallCreator.Project\shell\open\command").'(default)'
+          Write-Output "open command: $assoc"
+          $p = Start-Process "$dir\LEDWallCreator.exe" -ArgumentList "--selftest","--selftest-log=installed-selftest.log" -Wait -PassThru
+          Get-Content installed-selftest.log -Tail 5
+          if ($p.ExitCode -ne 0) { Write-Output "::error::Installed app failed its self-test"; exit 1 }
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          Start-Sleep -Seconds 5      # the uninstaller finishes removing itself after it exits
+          if (Test-Path "$dir\LEDWallCreator.exe") { Write-Output "::error::Uninstall left the app behind"; exit 1 }
+          if (Test-Path "$env:PUBLIC\Desktop\LED Wall Creator.lnk") { Write-Output "::error::Uninstall left the desktop shortcut"; exit 1 }
+          if (Test-Path "HKLM:\Software\Classes\LEDWallCreator.Project") { Write-Output "::error::Uninstall left the file association"; exit 1 }
+          Write-Output "install / uninstall OK"
+
       - name: Self-test (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -89,6 +121,7 @@ jobs:
           cd dist
           if [ "$RUNNER_OS" = "Windows" ]; then
             7z a -tzip ../LEDWallCreator-windows.zip LEDWallCreator > /dev/null
+            cp LEDWallCreator-Setup.exe ../          # the installer (what the website offers)
           elif [ "$RUNNER_OS" = "macOS" ]; then
             ditto -c -k --keepParent LEDWallCreator.app ../LEDWallCreator-macos.zip
           else

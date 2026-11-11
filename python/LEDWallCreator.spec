@@ -30,6 +30,23 @@ a = Analysis(
     runtime_hooks=["pyi_rth_cv2.py"],    # macOS .app: load OpenCV's compiled module directly
     noarchive=False,
 )
+# Windows: name, version and description in the .exe's Properties / Task Manager
+VERSION_INFO = None
+if sys.platform.startswith("win"):
+    from PyInstaller.utils.win32 import versioninfo as vi
+    import re
+    nums = tuple(int(n) for n in re.findall(r"\d+", __version__)[:4])
+    nums = (nums + (0, 0, 0, 0))[:4]
+    strings = [vi.StringStruct(k, v) for k, v in [
+        ("CompanyName", "LED Wall Creator"), ("FileDescription", "LED Wall Creator"),
+        ("FileVersion", __version__), ("InternalName", "LEDWallCreator"),
+        ("OriginalFilename", "LEDWallCreator.exe"), ("ProductName", "LED Wall Creator"),
+        ("ProductVersion", __version__), ("LegalCopyright", "MIT License")]]
+    VERSION_INFO = vi.VSVersionInfo(
+        ffi=vi.FixedFileInfo(filevers=nums, prodvers=nums),
+        kids=[vi.StringFileInfo([vi.StringTable("040904B0", strings)]),
+              vi.VarFileInfo([vi.VarStruct("Translation", [0x0409, 1200])])])
+
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [],
@@ -37,6 +54,7 @@ exe = EXE(
     name="LEDWallCreator",
     console=False,                 # GUI app: no terminal window
     icon=ICON,
+    version=VERSION_INFO,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="LEDWallCreator")
 if sys.platform == "darwin":

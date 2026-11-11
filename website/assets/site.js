@@ -6,7 +6,8 @@
   const REPO = "HenriqueSim/LED_WALL_CREATOR";
   const BASE = `https://github.com/${REPO}/releases/latest/download/`;
   const FILES = {
-    windows: { file: "LEDWallCreator-windows.zip", name: "Windows", mb: 213 },
+    // the installer; releases made before it existed only have the zip (fallback)
+    windows: { file: "LEDWallCreator-Setup.exe", fallback: "LEDWallCreator-windows.zip", name: "Windows", mb: 150 },
     mac: { file: "LEDWallCreator-macos.zip", name: "macOS", mb: 172 },
     linux: { file: "LEDWallCreator-linux.tar.gz", name: "Linux", mb: 326 },
   };
@@ -60,6 +61,10 @@
     const cached = sessionStorage.getItem("lwc-release");
     const use = (data) => {
       version = (data.tag_name || "").replace(/^v/, "");
+      const names = (data.assets || []).map((a) => a.name);
+      Object.values(FILES).forEach((f) => {
+        if (f.fallback && names.length && !names.includes(f.file) && names.includes(f.fallback)) f.file = f.fallback;
+      });
       (data.assets || []).forEach((a) => {
         Object.values(FILES).forEach((f) => { if (a.name === f.file) f.mb = Math.round(a.size / 1048576); });
       });

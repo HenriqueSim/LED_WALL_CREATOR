@@ -8,6 +8,10 @@ How an update works:
 4. The new version waits for the old one to exit, moves anything the user kept inside the old
    install (projects, audio, videos...) into the new one, and only then deletes the old install
    (`finish_update()`). If anything can't be moved, the old install is left alone.
+
+Windows copies installed with the installer (Program Files, has an uninstaller) are different:
+the newest LEDWallCreator-Setup.exe is downloaded and started (`run_installer()`), it asks for
+permission, closes the app, updates it in place and starts it again.
 """
 
 from __future__ import annotations
@@ -65,6 +69,17 @@ def current_install() -> str | None:
     return os.path.dirname(exe)
 
 
+INSTALLER_ASSET = f"{APP_NAME}-Setup.exe"     # the Windows installer on the release page
+
+
+def is_installed() -> bool:
+    """True for the copy the Windows installer put in Program Files (its uninstaller sits next to it)."""
+    if not sys.platform.startswith("win"):
+        return False
+    install = current_install()
+    return bool(install) and os.path.isfile(os.path.join(install, "unins000.exe"))
+
+
 def platform_key() -> str:
     return "windows" if sys.platform.startswith("win") else "macos" if sys.platform == "darwin" else "linux"
 
@@ -118,8 +133,13 @@ def fetch_latest(timeout: float = 6.0) -> dict:
 
 def release_info(data: dict) -> dict:
     tag = data.get("tag_name", "")
-    key = platform_key()
-    asset = next((a for a in data.get("assets", []) if key in a.get("name", "").lower()), None)
+    assets = data.get("assets", [])
+    if is_installed():
+        asset = next((a for a in assets if a.get("name", "").lower() == INSTALLER_ASSET.lower()), None)
+    else:   # the portable archive (never the installer: an archive is unpacked next to the app)
+        key = platform_key()
+        asset = next((a for a in assets if key in a.get("name", "").lower()
+                      and a.get("name", "").lower().endswith((".zip", ".tar.gz", ".tgz"))), None)
     return {
         "version": ".".join(str(n) for n in parse_version(tag)),
         "tag": tag,
@@ -230,6 +250,16 @@ def launch_new(new_install: str, old_install: str | None, open_path: str | None 
     else:
         subprocess.Popen([executable_in(new_install)] + args, start_new_session=True, close_fds=True,
                          cwd=new_install, **quiet)
+
+
+def run_installer(setup_exe: str, open_path: str | None = None):
+    """Start the downloaded Windows installer for an in-place update: no wizard pages, just its
+    progress window; Windows asks for permission first (raises OSError if the user says no). The
+    installer closes this app if it's still running and starts the new version when done."""
+    args = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/relaunch=1"]
+    if open_path:
+        args.append(f'/openfile="{open_path}"')
+    os.startfile(setup_exe, "open", " ".join(args))     # ShellExecute: shows the UAC prompt
 
 
 # ---- cleaning up the old version -------------------------------------------------------------

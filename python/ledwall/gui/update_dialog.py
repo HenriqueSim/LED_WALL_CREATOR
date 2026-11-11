@@ -58,6 +58,10 @@ class InstallWorker(QThread):
                 self.progress.emit(pct, f"Downloading… {mb(done):.0f} of {mb(total):.0f} MB" if total
                                    else f"Downloading… {mb(done):.0f} MB")
             updater.download(info["asset_url"], archive, prog, lambda: self._cancel)
+            if updater.is_installed():            # Windows installer: it does the rest (see _installed)
+                self.progress.emit(100, "Downloaded")
+                self.done.emit(archive)
+                return
             self.progress.emit(92, "Installing…")
             fallback = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation) \
                 or os.path.expanduser("~")
@@ -91,7 +95,10 @@ class UpdateDialog(QDialog):
         notes.setOpenExternalLinks(True)
         notes.setMarkdown(info.get("notes") or "No release notes.")
         self.frozen = updater.current_install() is not None
-        sub = QLabel("Your projects are kept: they live in their own folders, and anything you saved "
+        sub = QLabel("The installer updates the app in place: Windows asks for permission once, then "
+                     "the app restarts. Your projects and settings are kept."
+                     if updater.is_installed() else
+                     "Your projects are kept: they live in their own folders, and anything you saved "
                      "inside the app's folder is moved into the new version before the old one is removed."
                      if self.frozen else
                      "You're running the app from its source code: update it with <code>git pull</code> "
@@ -155,6 +162,9 @@ class UpdateDialog(QDialog):
         self.worker.start()
 
     def _installed(self, new_path):
+        if updater.is_installed():
+            self._run_installer(new_path)
+            return
         old = updater.current_install()
         same_place = old and os.path.dirname(os.path.abspath(old)) == os.path.dirname(new_path)
         if not same_place:
@@ -168,6 +178,17 @@ class UpdateDialog(QDialog):
                                self.open_project() if self.open_project else None)
         except Exception as exc:
             QMessageBox.critical(self, "Update", f"The new version is in\n{new_path}\nbut couldn't be started: {exc}")
+            return
+        self.accept()
+        self.quit_app()
+
+    def _run_installer(self, setup_exe):
+        self.lbl_status.setText("Starting the installer…")
+        try:
+            updater.run_installer(setup_exe, self.open_project() if self.open_project else None)
+        except OSError as exc:
+            cancelled = getattr(exc, "winerror", None) == 1223          # the user said no to the UAC prompt
+            self._failed("" if cancelled else f"The installer couldn't be started: {exc}")
             return
         self.accept()
         self.quit_app()

@@ -160,11 +160,11 @@ and download the file for your computer:
 
 | Computer | File | How to start it |
 |---|---|---|
-| **Windows** 10 / 11 | `LEDWallCreator-windows.zip` | Unzip it (right-click → *Extract All*), open the folder and double-click **LEDWallCreator.exe**. If Windows shows *"Windows protected your PC"*, click **More info → Run anyway** (the app isn't signed with a paid certificate). |
+| **Windows** 10 / 11 | `LEDWallCreator-Setup.exe` | Run it and click through the installer (tick *Create a desktop shortcut* if you want one). If Windows shows *"Windows protected your PC"*, click **More info → Run anyway** (the app isn't signed with a paid certificate). It installs into *Program Files*, adds a Start menu entry, opens `.ledwall` files, and is removed like any program: **Settings → Apps → LED Wall Creator → Uninstall**. Prefer no install? `LEDWallCreator-windows.zip` is the portable version: unzip it and double-click **LEDWallCreator.exe**. |
 | **macOS** (Apple Silicon: M1 and newer) | `LEDWallCreator-macos.zip` | Unzip it and drag **LEDWallCreator** to *Applications*. The first time, **right-click it → Open → Open** (the app isn't notarised by Apple). If macOS says it is "damaged", run `xattr -cr /Applications/LEDWallCreator.app` in Terminal once. |
 | **Linux** (x86-64) | `LEDWallCreator-linux.tar.gz` | `tar -xzf LEDWallCreator-linux.tar.gz` and run `./LEDWallCreator/LEDWallCreator`. |
 
-Everything is included, ffmpeg too. Keep the files inside the unzipped folder together. The
+Everything is included, ffmpeg too. Keep the files inside the unzipped folder together (zip / tar.gz versions). The
 download is big (a few hundred MB) because it carries its own copies of Python, Qt, OpenCV and
 the audio analysis libraries.
 
@@ -173,7 +173,9 @@ and stays quiet when you're offline) and offers to install it: *Install update* 
 puts it next to the current one as `LEDWallCreator <version>`, restarts into it and removes the
 old version. Your projects are safe: they live in their own folders, and anything you saved
 inside the app's folder is moved into the new version before the old one is removed (if a file
-can't be moved, the old version is kept). *Help → Check for Updates* checks by hand; untick
+can't be moved, the old version is kept). The installed Windows version updates through its
+installer instead: it downloads the new `LEDWallCreator-Setup.exe`, Windows asks for permission,
+and the app is updated in place and restarted. *Help → Check for Updates* checks by hand; untick
 *Check for updates when the app starts* in that dialog to turn the automatic check off. Versions
 up to v0.2.0 don't have this yet: download v0.3.1 by hand once.
 
@@ -202,12 +204,32 @@ pip install -r requirements.txt
 python led_wall_motion_generator.py            # or: ... my_song.ledwall / ... my_song.wav
 ```
 
+### Working on the code on Windows
+
+1. Install [Git for Windows](https://git-scm.com/download/win) and
+   [Python 3.11](https://www.python.org/downloads/) (tick **"Add python.exe to PATH"**).
+2. Clone into a folder on your Desktop (in *Command Prompt*; if your Desktop is in OneDrive, use `%USERPROFILE%\OneDrive\Desktop`):
+
+   ```bat
+   cd %USERPROFILE%\Desktop
+   git clone https://github.com/HenriqueSim/LED_WALL_CREATOR.git
+   ```
+
+3. Double-click **`run_windows.bat`** to run the app from the code.
+4. To build the installer on your PC, install [Inno Setup 6](https://jrsoftware.org/isdl.php)
+   (or `winget install JRSoftware.InnoSetup`) and double-click **`build_windows.bat`**. It makes
+   `python\dist\LEDWallCreator-Setup.exe`.
+
+The repository works the same on Windows, macOS and Linux; `.gitattributes` keeps line endings right
+(`.bat` / `.iss` files CRLF, `.sh` files LF).
+
 ### Making a release (maintainers)
 
 The builds are made by GitHub Actions (`.github/workflows/build.yml`). Push a version tag and,
-about 15 minutes later, the Windows, macOS and Linux downloads appear on the Releases page. Each
-build is self-tested first (it opens the window, analyses audio, renders and exports a short
-video):
+about 15 minutes later, the Windows (installer + zip), macOS and Linux downloads appear on the
+Releases page. Each build is self-tested first (it opens the window, analyses audio, renders and
+exports a short video); the Windows installer is also tested by installing it, self-testing the
+installed app and uninstalling it again:
 
 ```bash
 git tag v1.0.0
@@ -218,7 +240,8 @@ The build writes the tag's number into `ledwall/version.py`, which is what the i
 check compares with the newest release. The release notes are shown in the update dialog.
 
 To build one locally: `pip install pyinstaller`, then `pyinstaller LEDWallCreator.spec` inside
-`python/`. The app ends up in `python/dist/`. Run it with `--selftest` to check it.
+`python/`. The app ends up in `python/dist/`. Run it with `--selftest` to check it. On Windows,
+`build_windows.bat` builds the app and the installer in one go.
 
 ## Code layout
 
@@ -226,6 +249,7 @@ To build one locally: `pip install pyinstaller`, then `pyinstaller LEDWallCreato
 python/
   led_wall_motion_generator.py   launcher (fonts, theme, main window, --selftest)
   LEDWallCreator.spec            PyInstaller recipe for the standalone app
+  installer/LEDWallCreator.iss   Windows installer / uninstaller (Inno Setup)
   requirements.txt
   fonts/                         bundled fonts (SIL Open Font License)
   icons/                         app icon (logo_source.png -> app.png / .ico / .icns via tools/make_icons.py)
@@ -238,7 +262,7 @@ python/
     resources.py   bundled files (fonts, icons) for source and packaged runs
     project.py     project folders (.ledwall, Media, Backups), saving and loading
     updater.py     update check, download, install and removal of the old version
-    file_assoc.py  opens .ledwall files with the app (Windows / Linux; macOS via the spec)
+    file_assoc.py  opens .ledwall files with the app (portable Windows / Linux; installer and macOS do it themselves)
     version.py     the app version (set from the tag by the release build)
     export.py      video export thread (OpenCV VideoWriter / ffmpeg)
     controller.py  undo / redo and change notifications

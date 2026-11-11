@@ -5,3 +5,7 @@
 *.mp4 binary
 *.jpg binary
 *.woff2 binary
+*.iss text eol=crlf
+*.ico binary
+*.icns binary
+*.exe binary

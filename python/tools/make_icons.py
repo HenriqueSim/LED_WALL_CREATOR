@@ -7,6 +7,35 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONS = os.path.join(HERE, "icons")
 src = Image.open(os.path.join(ICONS, "logo_source.png")).convert("RGBA")
 
+def write_ico(img, path, sizes=(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)):
+    """A Windows .ico the classic way: uncompressed 32-bit bitmaps for the small sizes and PNG only
+    for 256 px. (Pillow writes every size as PNG; Explorer, the taskbar and the exe's embedded icon
+    then often show a blank or generic icon.)"""
+    import io
+    import struct
+    entries = []
+    for s in sizes:
+        im = img.resize((s, s), Image.LANCZOS).convert("RGBA")
+        if s >= 256:
+            buf = io.BytesIO()
+            im.save(buf, "PNG")
+            data = buf.getvalue()
+        else:
+            px = im.tobytes("raw", "BGRA")
+            rows = [px[y * s * 4:(y + 1) * s * 4] for y in range(s)][::-1]       # bottom-up
+            mask_row = ((s + 31) // 32) * 4                                     # AND mask: all 0
+            data = (struct.pack("<IiiHHIIiiII", 40, s, s * 2, 1, 32, 0, s * s * 4 + mask_row * s, 0, 0, 0, 0)
+                    + b"".join(rows) + b"\0" * (mask_row * s))
+        entries.append((s, data))
+    out = struct.pack("<HHH", 0, 1, len(entries))
+    off = 6 + 16 * len(entries)
+    for s, data in entries:
+        out += struct.pack("<BBBBHHII", s % 256, s % 256, 0, 0, 1, 32, len(data), off)
+        off += len(data)
+    with open(path, "wb") as fh:
+        fh.write(out + b"".join(d for _s, d in entries))
+
+
 # square around the "LW" panels (the artwork is 3:2 with the letters in the middle)
 w, h = src.size
 side = h
@@ -25,6 +54,6 @@ icon.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)))
 icon.paste(body, (M, M), mask)
 
 icon.resize((512, 512), Image.LANCZOS).save(os.path.join(ICONS, "app.png"))
-icon.save(os.path.join(ICONS, "app.ico"), sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+write_ico(icon, os.path.join(ICONS, "app.ico"))
 icon.save(os.path.join(ICONS, "app.icns"))
 print("written:", ", ".join(sorted(os.listdir(ICONS))))

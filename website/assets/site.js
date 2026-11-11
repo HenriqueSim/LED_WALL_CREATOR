@@ -31,9 +31,7 @@
       if (key) {
         a.href = url(key);
         a.setAttribute("download", "");
-      } else {
-        a.href = "download.html";     // phones: show all systems (the app runs on computers)
-      }
+      }                               // phones keep the link to the Download page (the app runs on computers)
     });
     document.querySelectorAll(".js-download-label").forEach((el) => {
       el.textContent = key ? `Download for ${FILES[key].name}` : "Download for your computer";

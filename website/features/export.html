@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Export · LED Wall Creator</title>
+  <meta name="description" content="Render the whole song or a seamless loop at 3840×1080, Full HD or any size. Frames are drawn on several cores and encoded on your graphics card when it has a video encoder.">
+  <meta name="theme-color" content="#07070a">
+  <link rel="icon" href="../assets/img/favicon.png">
+  <link rel="preload" href="../assets/fonts/Inter-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-page="feature">
+
+<header class="nav">
+  <a class="brand" href=".././"><img src="../assets/img/logo.png" alt=""><span>LED Wall Creator</span></a>
+  <nav class="nav-links">
+    <a href=".././">Home</a>
+    <a href="../download.html">Download</a>
+    <a href="../story.html">Story</a>
+  </nav>
+  <a class="btn btn-primary btn-sm js-download" href="../download.html">Download</a>
+</header>
+
+<section class="fhero">
+  <video class="fhero-video" src="../media/rec-export.mp4" poster="../media/rec-export.jpg" muted loop playsinline autoplay preload="auto"></video>
+  <div class="wrap fhero-text">
+    <a class="back reveal" href=".././#features">← All features</a>
+    <span class="eyebrow reveal"><span class="dot"></span>Export</span>
+    <h1 class="reveal">A 4K video, ready for the show.</h1>
+    <p class="lead reveal">Render the whole song or a seamless loop at 3840×1080, Full HD or any size. Frames are drawn on several cores and encoded on your graphics card when it has a video encoder.</p>
+    <div class="cta reveal" style="justify-content:flex-start">
+      <a class="btn btn-primary js-download" href="../download.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg><span class="js-download-label">Download free</span></a>
+      <a class="btn" href="#how">How it works</a>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how">
+  <div class="wrap how">
+    <div class="how-text">
+      <span class="eyebrow reveal"><span class="dot"></span>How it works</span>
+      <h2 class="reveal">In the app</h2>
+      <ol class="steps big reveal">
+          <li>In <b>Export</b>, pick the resolution (3840×1080 for a wide LED wall, 1920×1080, or a custom size) and 30 or 60 fps.</li>
+          <li>The <b>Range</b> is the loop region from the Master Track, or the whole song if there isn't one.</li>
+          <li>Leave <b>Encode on the graphics card</b> on: the Encoder line shows what your computer will use.</li>
+          <li>Tick <b>Mux audio</b> to put the song in the video too.</li>
+          <li>Click <b>Render Video</b> and choose where to save the MP4.</li>
+      </ol>
+      <div class="chips reveal" style="margin-top:22px"><span class="chip">NVIDIA, Apple, Intel and AMD encoders</span><span class="chip">H.264 MP4 plays everywhere</span><span class="chip">Renders go into the project folder</span></div>
+    </div>
+    <figure class="how-shot reveal">
+      <img src="../media/ui-export.jpg" alt="Export in LED Wall Creator" loading="lazy">
+    </figure>
+  </div>
+</section>
+
+<section class="section" style="padding-top:0">
+  <div class="wrap pager">
+    <a class="pager-card reveal" href="stage-preview.html"><span class="muted">← Previous</span><b>Stage simulator</b></a>
+    <a class="pager-card reveal" href=".././#features"><span class="muted">Overview</span><b>All features</b></a>
+    <a class="pager-card reveal right" href="projects.html"><span class="muted">Next →</span><b>Tidy projects</b></a>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <a class="brand" href=".././"><img src="../assets/img/logo.png" alt=""><span>LED Wall Creator</span></a>
+    <nav><a href=".././">Home</a><a href="../download.html">Download</a><a href="../story.html">Story</a>
+      <a href="https://github.com/HenriqueSim/LED_WALL_CREATOR" rel="noopener">Source code</a></nav>
+    <span>Free &amp; open source (MIT) · made by a band, for bands</span>
+  </div>
+</footer>
+
+<script src="../assets/site.js" defer></script>
+</body>
+</html>

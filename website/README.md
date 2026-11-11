@@ -5,7 +5,7 @@ Live at **https://henriquesim.github.io/LED_WALL_CREATOR/**
 The LED Wall Creator website: plain HTML / CSS / JS, no build step. Published to GitHub Pages by
 `.github/workflows/pages.yml` on every push to `main` that changes this folder.
 
-- `index.html` home (LED wall hero, scrolling feature showcase), `download.html`, `story.html`
+- `index.html` home (LED wall hero, scrolling feature showcase, feature grid), `download.html`, `story.html`
 - `assets/` styles, script, font (Inter), logo
 - `media/` the demo videos, posters and app screenshots (all made with the app itself)
 - `tools/` how the media is made (not published):
@@ -13,6 +13,11 @@ The LED Wall Creator website: plain HTML / CSS / JS, no build step. Published to
     `media/wall.mp4` (with audio), `stage-led.mp4`, `stage-projector.mp4` and posters;
     `--sheet` only writes a contact sheet to check the look
   - `make_shots.py` app screenshots with the demo loaded (`media/ui-*.jpg`)
+  - `make_recordings.py [name ...]` screen recordings of each workflow, made by driving the real
+    app with a drawn cursor (`media/rec-*.mp4` and posters)
+  - `make_pages.py` writes the feature pages (`features/*.html`) and the home page's feature grid
+    from one list; edit the texts there, not in the generated files
+- `features/` one page per feature (generated)
 
 Run both from the `python/` folder with the app's environment, e.g.
 `.venv/bin/python ../website/tools/make_demo.py "../song.mp3"`.

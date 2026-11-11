@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pattern Editor · LED Wall Creator</title>
+  <meta name="description" content="Every shape on the wall has a folder of lanes: the whole shape, one lane per band member, one per group, and the motion effects. Draw notes on a 1/16 grid while the section loops.">
+  <meta name="theme-color" content="#07070a">
+  <link rel="icon" href="../assets/img/favicon.png">
+  <link rel="preload" href="../assets/fonts/Inter-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-page="feature">
+
+<header class="nav">
+  <a class="brand" href=".././"><img src="../assets/img/logo.png" alt=""><span>LED Wall Creator</span></a>
+  <nav class="nav-links">
+    <a href=".././">Home</a>
+    <a href="../download.html">Download</a>
+    <a href="../story.html">Story</a>
+  </nav>
+  <a class="btn btn-primary btn-sm js-download" href="../download.html">Download</a>
+</header>
+
+<section class="fhero">
+  <video class="fhero-video" src="../media/rec-pattern.mp4" poster="../media/rec-pattern.jpg" muted loop playsinline autoplay preload="auto"></video>
+  <div class="wrap fhero-text">
+    <a class="back reveal" href=".././#features">← All features</a>
+    <span class="eyebrow reveal"><span class="dot"></span>Pattern Editor</span>
+    <h1 class="reveal">Draw light like you&#x27;d program a beat.</h1>
+    <p class="lead reveal">Every shape on the wall has a folder of lanes: the whole shape, one lane per band member, one per group, and the motion effects. Draw notes on a 1/16 grid while the section loops.</p>
+    <div class="cta reveal" style="justify-content:flex-start">
+      <a class="btn btn-primary js-download" href="../download.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg><span class="js-download-label">Download free</span></a>
+      <a class="btn" href="#how">How it works</a>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how">
+  <div class="wrap how">
+    <div class="how-text">
+      <span class="eyebrow reveal"><span class="dot"></span>How it works</span>
+      <h2 class="reveal">In the app</h2>
+      <ol class="steps big reveal">
+          <li>Pick a pattern on the left (or click <b>New</b>). A pattern is a loop of 1 to 16 bars.</li>
+          <li>Open an element's folder and drag across a lane to draw a note: its length is how long it's lit, the <b>Velocity</b> box sets how bright.</li>
+          <li>Use the member and group lanes to light only part of a shape, for example the left side of the stage on the first beat and the right side on the second.</li>
+          <li>Add <b>Pulse</b>, <b>Chase</b>, <b>Random</b> or <b>Strobe</b> for motion, and set <b>Effect speed</b> to ½× or 2× for half-time or double-time sections.</li>
+          <li>Playback loops the part of the song you're editing, so you see the result straight away.</li>
+      </ol>
+      <div class="chips reveal" style="margin-top:22px"><span class="chip">Shift-drag to select notes</span><span class="chip">Ctrl+C / V / D</span><span class="chip">Arrows nudge</span><span class="chip">Click the ruler to jump</span><span class="chip">Fold the folders you&#x27;re not using</span></div>
+    </div>
+    <figure class="how-shot reveal">
+      <img src="../media/ui-pattern.jpg" alt="Pattern Editor in LED Wall Creator" loading="lazy">
+    </figure>
+  </div>
+</section>
+
+<section class="section" style="padding-top:0">
+  <div class="wrap pager">
+    <a class="pager-card reveal" href="updates.html"><span class="muted">← Previous</span><b>Updates itself</b></a>
+    <a class="pager-card reveal" href=".././#features"><span class="muted">Overview</span><b>All features</b></a>
+    <a class="pager-card reveal right" href="master-track.html"><span class="muted">Next →</span><b>Synced to audio</b></a>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <a class="brand" href=".././"><img src="../assets/img/logo.png" alt=""><span>LED Wall Creator</span></a>
+    <nav><a href=".././">Home</a><a href="../download.html">Download</a><a href="../story.html">Story</a>
+      <a href="https://github.com/HenriqueSim/LED_WALL_CREATOR" rel="noopener">Source code</a></nav>
+    <span>Free &amp; open source (MIT) · made by a band, for bands</span>
+  </div>
+</footer>
+
+<script src="../assets/site.js" defer></script>
+</body>
+</html>

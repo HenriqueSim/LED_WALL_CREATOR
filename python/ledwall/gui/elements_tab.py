@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 
 from ..model import ELEMENT_LABELS, SHAPE_KINDS, SHAPE_LABELS, element_defaults, new_id, new_shape, preset_element
 from .band_name_panel import BandNamePanel
-from .common import ColorButton, LabeledSlider, add_slider_row, hint
+from .common import roomy, ColorButton, LabeledSlider, add_slider_row, hint
 
 LOGO_ID = "__logo__"     # list entry for the band name layer
 
@@ -26,7 +26,7 @@ PRESETS = [
     ("custom", "Custom (build from shapes)"), ("custom_rays", "Custom example: rising rays"),
     ("sun", "Sunset sun"), ("beam", "Horizontal beam"), ("hexagon", "Hexagon"), ("polygon", "Polygon"),
     ("ring", "Ring / circle"), ("bar", "Single bar"), ("bars", "Vertical blocks"), ("shafts", "Light shafts"),
-    ("horizon", "Horizon lights"),
+    ("horizon", "Horizon lights"), ("haze", "Haze (soft wash of light)"),
 ]
 
 INT_ATTRS = {"sides", "count", "lines", "cuts", "dashes"}
@@ -57,6 +57,8 @@ SHAPE_FIELDS = {
              ("lines", "Parallel lines", 1, 8, 1, "{:.0f}"), ("spacing", "Line spacing", 0.005, 0.3, 0.005, "{:.3f}"),
              THICK, X, Y, ROT, SPIN],
     "custom": [("size", "Scale", 0.02, 1.5, 0.005, "{:.3f}"), X, Y, ROT, SPIN],
+    "haze": [("size", "Spread", 0.05, 1.5, 0.01, "{:.2f}"), ("height", "Reach", 0.05, 1.2, 0.01, "{:.2f}"), X,
+             ("y", "Rises from", 0, 1.2, 0.01, "{:.2f}")],
 }
 
 # settings of one shape inside a custom element, per shape kind
@@ -78,12 +80,15 @@ SHAPE_EDIT_FIELDS = {
              ("rot", "Start angle", -180, 180, 1, "{:.0f}°"), _STH],
 }
 LIGHT_FIELDS = {
+    "haze": [("glow", "Strength", 0, 8, 0.05, "{:.2f}"), ("music", "Music pulse", 0, 4, 0.05, "{:.2f}")],
     "sun": [("glow", "Halo", 0, 3, 0.05, "{:.2f}"), ("idle", "Resting brightness", 0, 1, 0.01, "{:.2f}"),
             ("react_scale", "Breathing", 0, 0.1, 0.002, "{:.3f}")],
 }
 DEFAULT_LIGHT = [("glow", "Glow", 0, 3, 0.05, "{:.2f}"), ("idle", "Idle glow in scene", 0, 1, 0.01, "{:.2f}")]
 PARTS_HINT = {
     "sun": "One part: lit by the brightest of its lanes.",
+    "haze": "No parts: put notes on its Haze amount lane in a pattern to bring it in (velocity = how much "
+            "haze). It brightens while the other elements are lit and breathes with the music.",
     "polygon": "Each side is a part.",
     "custom": "Each shape is a part, shared out between the members in list order.",
 }
@@ -118,7 +123,7 @@ class ElementsTab(QWidget):
         self.combo_pattern.currentIndexChanged.connect(self._on_pattern_combo)
         prow.addWidget(self.combo_pattern, 1)
         ll.addLayout(prow)
-        self.list = QListWidget()
+        self.list = roomy(QListWidget())
         self.list.currentItemChanged.connect(self._on_select)
         self.list.itemChanged.connect(self._on_item_changed)
         ll.addWidget(self.list, 1)

@@ -184,8 +184,10 @@ class MotionEngine:
                     peak = n.velocity * math.exp(-age / pdec) if pdec > 0 and os_ >= cs else 0.0
                     v = out.get(n.lane)
                     if v is None:
-                        out[n.lane] = [lv, gate, peak]
+                        out[n.lane] = [lv, gate, peak, pat.fx_speed]
                     else:
+                        if gate > v[1]:
+                            v[3] = pat.fx_speed       # the louder pattern sets the effect speed
                         v[0], v[1], v[2] = max(v[0], lv), max(v[1], gate), max(v[2], peak)
 
     # ---- frame state -------------------------------------------------------------
@@ -238,6 +240,16 @@ class MotionEngine:
             v = lanes.get(key)
             return v[idx] if v else 0.0
 
+        b_rel = b - loop[0] if loop else b
+
+        def fx_clock(sub_key):
+            """(beat pulse, 1/16 step) of an effect lane at its pattern's speed."""
+            v = lanes.get(sub_key)
+            sp = v[3] if v else 1.0
+            if sp == 1.0:
+                return beat_pulse, step
+            return math.exp(-((b * sp) % 1.0) * 6.0), math.floor(b_rel * STEPS_PER_BEAT * sp)
+
         midx = song.member_index()
         fpk = lane("fx:flash", 2)
         bloom = 1.2 * fpk if fpk > 0.002 else 0.0
@@ -276,22 +288,26 @@ class MotionEngine:
                 pulse, chase, rnd, strobe = L("pulse", 1), L("chase", 1), L("random", 1), L("strobe", 1)
                 presence = max(float(levels.max()) if n_mem else 0.0, pulse, chase, rnd, strobe)
             if pulse > 0 and n_mem:
-                levels = np.maximum(levels, pulse * (0.2 + 0.8 * beat_pulse))
-                bloom += 0.35 * pulse * beat_pulse / max(1, len(song.elements))
+                bp, _ = fx_clock(el_lane(el.id, "pulse"))
+                levels = np.maximum(levels, pulse * (0.2 + 0.8 * bp))
+                bloom += 0.35 * pulse * bp / max(1, len(song.elements))
             if chase > 0 and n_mem:
-                i = step % n_mem
+                _, cs = fx_clock(el_lane(el.id, "chase"))
+                i = cs % n_mem
                 levels[i] = max(levels[i], chase)
-                j = (step - 1) % n_mem
+                j = (cs - 1) % n_mem
                 levels[j] = max(levels[j], chase * 0.35)
             if rnd > 0:
+                _, rs = fx_clock(el_lane(el.id, "random"))
                 for i in range(n_mem):
-                    if _hash01(step, i) < 0.45:
-                        levels[i] = max(levels[i], rnd * (0.55 + 0.45 * _hash01(step, i + 101)))
+                    if _hash01(rs, i) < 0.45:
+                        levels[i] = max(levels[i], rnd * (0.55 + 0.45 * _hash01(rs, i + 101)))
             # audio reactivity on whatever is lit
             if n_mem and lk.audio_react > 0:
                 levels = levels * ((1.0 - lk.audio_react) + lk.audio_react * (0.25 + 0.75 * bands)) * (1 + 0.25 * lk.audio_react)
             if strobe > 0 and n_mem:
-                on = ((b * max(1, lk.strobe_rate)) % 1.0) < 0.45
+                sv = lanes.get(el_lane(el.id, "strobe"))
+                on = ((b * max(1, lk.strobe_rate) * (sv[3] if sv else 1.0)) % 1.0) < 0.45
                 if on:
                     levels = np.maximum(levels, strobe)
                     flash = np.maximum(flash, strobe)
@@ -303,6 +319,10 @@ class MotionEngine:
                 flash = np.maximum(flash, 0.85 * fpk)
             levels = np.clip(levels, 0, 1.5).astype(np.float32)
             flash = np.clip(flash, 0, 1).astype(np.float32)
+            if el.type == "haze":       # no parts: its amount is the lane level; it doesn't light members
+                amount = 1.0 if self.preview_pulse else L("all")
+                elements[el.id] = (levels, flash, min(1.0, amount))
+                continue
             elements[el.id] = (levels, flash, min(1.0, presence))
             if n_mem:
                 all_lv = np.maximum(all_lv, levels)

@@ -124,6 +124,7 @@ class Pattern:
     color: tuple = (255, 160, 40)
     notes: list = field(default_factory=list)
     elements: list | None = None     # ids of the song's elements this pattern uses (None = all of them)
+    fx_speed: float = 1.0            # Pulse / Chase / Random / Strobe speed: 0.25 .. 4 x the song tempo
 
     def uses(self, eid: str) -> bool:
         return self.elements is None or eid in self.elements
@@ -189,6 +190,7 @@ class Element:
     core: float = 0.5            # sun: how much the centre glows towards white
     softness: float = 0.025      # sun: edge feather (fraction of the radius)
     cuts: int = 0                # sun: horizontal cut lines near the horizon
+    music: float = 1.0           # haze: how much it breathes with the music's loudness
 
 
 def preset_element(kind: str) -> Element:
@@ -208,6 +210,8 @@ def preset_element(kind: str) -> Element:
                        count=6),
         "horizon": dict(name="Horizon", type="horizon", x=0.5, y=0.84, size=0.9, height=0.6, idle=0.12, count=6),
         "beam": dict(name="Horizontal beam", type="beam", x=0.5, y=0.9, size=0.8, thickness=6, idle=0.2, count=1),
+        "haze": dict(name="Haze", type="haze", x=0.5, y=1.0, size=0.55, height=0.38, glow=1.5, idle=0.0,
+                     music=1.0),
         "custom": dict(name="Custom element", type="custom", x=0.5, y=0.6, size=0.3, idle=0.15,
                        shapes=[new_shape("polygon", sides=6, size=0.8, thickness=6)]),
         "custom_rays": dict(name="Rising rays", type="custom", x=0.5, y=0.97, size=0.55, idle=0.15, glow=0.9,
@@ -220,7 +224,7 @@ def preset_element(kind: str) -> Element:
 
 
 _TYPE_PRESET = {"sun": "sun", "polygon": "polygon", "ring": "ring", "bars": "bars", "shafts": "shafts",
-                "horizon": "horizon", "beam": "beam", "custom": "custom"}
+                "horizon": "horizon", "beam": "beam", "custom": "custom", "haze": "haze"}
 
 
 def element_defaults(el: Element) -> Element:
@@ -243,8 +247,8 @@ class Look:
     sensitivity: float = 0.55
     headroom: float = 0.24                  # top fraction kept free for lyrics
     strobe_rate: int = 4                    # flashes per beat
-    ambient: float = 1.0                    # soft wash of the song colour from the bottom centre (0 = off)
-    ambient_pulse: float = 1.0              # how much that wash pulses with the music's loudness
+    ambient: float = 0.0                    # old: the always-on wash, now a Haze element (see from_dict)
+    ambient_pulse: float = 1.0              # old: its music pulse
     # band name layer (stacks on top of any background)
     logo_text: str = "band name"
     logo_stacked: bool = False              # old flag, see logo_layout
@@ -295,6 +299,8 @@ class Song:
 
     def element_sublanes(self, el) -> list:
         """[(lane key, label, kind)] inside one element's folder."""
+        if el.type == "haze":       # no parts: one lane, note velocity = how much haze
+            return [(el_lane(el.id, "all"), "Haze amount", "all")]
         out = [(el_lane(el.id, "all"), "All", "all")]
         out += [(el_lane(el.id, f"m:{m.id}"), m.name, "member") for m in self.members]
         out += [(el_lane(el.id, f"g:{g.id}"), g.name, "group") for g in self.groups]
@@ -376,12 +382,12 @@ class Song:
     # ---- (de)serialisation ---------------------------------------------------
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["version"] = 5
+        d["version"] = 6
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "Song":
-        if d.get("version") not in (2, 3, 4, 5):
+        if d.get("version") not in (2, 3, 4, 5, 6):
             raise ValueError("This project was made with an older version of the app (no patterns).")
 
         def tup(v):
@@ -410,6 +416,7 @@ class Song:
         # before per-pattern elements: every pattern used the elements switched on for the project
         old_on = [e.id for e in elements if e.visible]
         patterns = [Pattern(id=p["id"], name=p["name"], bars=p.get("bars", 1), color=tup(p.get("color", (255, 160, 40))),
+                            fx_speed=float(p.get("fx_speed", 1.0)),
                             notes=[Note(**n) for n in p.get("notes", [])],
                             elements=list(p["elements"]) if p.get("elements") is not None else
                             (None if "elements" in p else list(old_on)))
@@ -430,6 +437,19 @@ class Song:
             # Band Name Light lane, so give the old notes a short light note at the same spot
             for p in patterns:
                 p.notes += [Note("fx:logo_glow", n.start, 1, n.velocity) for n in p.notes if n.lane == "fx:logo"]
+        if d.get("version", 0) < 6:
+            # the ambient wash used to be always on (a Look setting); it is now a Haze element that
+            # each pattern switches on with a note. Old projects get one, on in every pattern.
+            amb = float(raw_look.get("ambient", 1.0))
+            if amb > 0 and patterns:
+                haze = preset_element("haze")
+                haze.glow, haze.music = amb, float(raw_look.get("ambient_pulse", 1.0))
+                elements.append(haze)
+                for p in patterns:
+                    if p.elements is not None:
+                        p.elements.append(haze.id)
+                    p.notes.append(Note(el_lane(haze.id, "all"), 0, p.bars * STEPS_PER_BAR, 1.0))
+            look.ambient = 0.0
         return Song(
             members=[Member(**m) for m in d.get("members", [])],
             groups=[Group(**g) for g in d.get("groups", [])],
@@ -467,9 +487,12 @@ def default_song() -> Song:
     build = Pattern(new_id(), "Build", 1, PATTERN_COLORS[3],
                     [Note(S("all"), 0, 16, 0.5), Note(B("chase"), 0, 12, 0.9), Note(B("strobe"), 12, 4, 0.8)])
 
-    intro.elements = [sun.id]                          # the intro is just the sun
+    haze = preset_element("haze")
+    intro.elements = [sun.id, haze.id]                 # the intro is just the sun (and some haze)
     for p in (groove, chorus, build):
-        p.elements = [beam.id, sun.id]
+        p.elements = [beam.id, sun.id, haze.id]
+    for p, v in ((intro, 0.7), (groove, 0.8), (chorus, 1.0), (build, 0.6)):
+        p.notes.append(Note(el_lane(haze.id, "all"), 0, p.bars * STEPS_PER_BAR, v))
 
     clips = [
         Clip(new_id(), intro.id, 0, 0.0, 16.0),
@@ -479,4 +502,4 @@ def default_song() -> Song:
     ]
     lyrics = [LyricClip(new_id(), "lyrics go here in the chorus", 48.0, 16.0)]
     look = Look(logo_color="cutout")
-    return Song(members, groups, [intro, groove, chorus, build], clips, lyrics, [beam, sun], look)
+    return Song(members, groups, [intro, groove, chorus, build], clips, lyrics, [beam, sun, haze], look)

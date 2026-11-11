@@ -3,9 +3,40 @@
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QColorDialog, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QWidget
+from PyQt6.QtWidgets import (
+    QColorDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QSlider, QStyledItemDelegate, QWidget,
+)
+
+
+class RoomyItemDelegate(QStyledItemDelegate):
+    """Taller list rows, and a big, readable box when renaming an item in place."""
+    ROW_H = 30
+    EDIT_H = 36
+
+    def sizeHint(self, option, index):
+        s = super().sizeHint(option, index)
+        return QSize(s.width(), max(s.height(), self.ROW_H))
+
+    def createEditor(self, parent, option, index):
+        ed = QLineEdit(parent)
+        ed.setObjectName("inlineEdit")
+        f = ed.font()
+        f.setPointSizeF(f.pointSizeF() * 1.15)
+        ed.setFont(f)
+        return ed
+
+    def updateEditorGeometry(self, editor, option, index):
+        r = option.rect
+        h = max(r.height(), self.EDIT_H)
+        editor.setGeometry(r.x(), r.y() + (r.height() - h) // 2, max(r.width(), 180), h)
+
+
+def roomy(list_widget):
+    """Apply RoomyItemDelegate to a QListWidget (kept alive by the widget)."""
+    list_widget.setItemDelegate(RoomyItemDelegate(list_widget))
+    return list_widget
 
 DARK_QSS = """
 QWidget { background: #111; color: #ddd; font-size: 12px; }

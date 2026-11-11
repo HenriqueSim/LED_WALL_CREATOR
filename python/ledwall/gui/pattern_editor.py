@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..model import PATTERN_COLORS, STEPS_PER_BAR, STEPS_PER_BEAT, Note, Pattern, new_id
-from .common import LANE_COLORS, ColorButton, hint
+from .common import LANE_COLORS, ColorButton, hint, roomy
 
 _CLIPBOARD: list = []   # [(lane, rel_start, length, velocity)]
 
@@ -518,6 +518,8 @@ class PatternTab(QWidget):
     loopSectionChanged = pyqtSignal(bool)
 
     SNAPS = [("1/16", 1), ("1/8", 2), ("1/4 (beat)", 4), ("1/2", 8), ("1 bar", 16)]
+    SPEEDS = [("¼×  (quarter time)", 0.25), ("½×  (half time)", 0.5), ("1×  (song tempo)", 1.0),
+              ("2×  (double time)", 2.0), ("4×", 4.0)]
 
     def __init__(self, ctl, parent=None):
         super().__init__(parent)
@@ -529,7 +531,7 @@ class PatternTab(QWidget):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(4, 4, 4, 4)
         ll.addWidget(QLabel("<b>Patterns</b>"))
-        self.list = QListWidget()
+        self.list = roomy(QListWidget())
         self.list.currentItemChanged.connect(self._on_select)
         self.list.itemChanged.connect(self._on_rename)
         ll.addWidget(self.list, 1)
@@ -560,6 +562,13 @@ class PatternTab(QWidget):
         self.spin_vel.setToolTip("Brightness of new notes; also edits the selected notes")
         self.spin_vel.valueChanged.connect(self._on_velocity)
         form.addRow("Velocity", self.spin_vel)
+        self.combo_speed = QComboBox()
+        for label, v in self.SPEEDS:
+            self.combo_speed.addItem(label, v)
+        self.combo_speed.setToolTip("How fast Pulse, Chase, Random and Strobe run in this pattern, relative to the "
+                                    "song's tempo: ½× for a half-time section, 2× for double time.")
+        self.combo_speed.currentIndexChanged.connect(self._on_speed)
+        form.addRow("Effect speed", self.combo_speed)
         ll.addLayout(form)
         self.lbl_elements = QLabel()
         self.lbl_elements.setObjectName("hint")
@@ -629,9 +638,12 @@ class PatternTab(QWidget):
         p = self.ctl.current_pattern
         self._updating = True
         self.spin_bars.setEnabled(p is not None)
+        self.combo_speed.setEnabled(p is not None)
         if p:
             self.spin_bars.setValue(p.bars)
             self.btn_color.set_rgb(p.color)
+            i = self.combo_speed.findData(p.fx_speed)
+            self.combo_speed.setCurrentIndex(i if i >= 0 else 2)
         self._updating = False
         self.grid.selected = []
         self.grid.highlight_bar = None
@@ -700,6 +712,14 @@ class PatternTab(QWidget):
         self.ctl.current_pattern_id = self.ctl.song.patterns[0].id if self.ctl.song.patterns else None
         self.ctl.commit("patterns")
         self.ctl.currentPatternChanged.emit(self.ctl.current_pattern_id or "")
+
+    def _on_speed(self, i):
+        p = self.ctl.current_pattern
+        v = self.combo_speed.itemData(i)
+        if self._updating or not p or v is None or v == p.fx_speed:
+            return
+        p.fx_speed = float(v)
+        self.ctl.commit("pattern", "fx_speed")
 
     def _on_bars(self, v):
         p = self.ctl.current_pattern

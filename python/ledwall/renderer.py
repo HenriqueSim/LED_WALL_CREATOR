@@ -81,12 +81,11 @@ class FrameRenderer:
         self.core = np.zeros((self.h, self.w, 3), np.uint8)
         self.layer = np.zeros((self.h, self.w, 3), np.uint8)
         self.mask = np.zeros((self.h, self.w), np.uint8)
-        ys, xs = np.mgrid[0:self.sh, 0:self.sw].astype(np.float32)
-        self.ambient = np.exp(-(((xs - self.sw / 2) / (self.sw * 0.55)) ** 2 + ((self.sh - ys) / (self.sh * 0.38)) ** 2))[..., None]
         self._grad_cache: dict = {}
         self._layout_cache: dict = {}
         self._sun_cache: dict = {}
         self._sun_img_cache: dict = {}
+        self._haze_cache: dict = {}
         self._logo_mix: dict = {}
         self._logo_key = None
         self.logo_bbox = None
@@ -181,7 +180,13 @@ class FrameRenderer:
         drawers = {"custom": self._draw_custom, "sun": self._draw_sun, "polygon": self._draw_polygon, "ring": self._draw_ring, "bars": self._draw_bars,
                    "shafts": self._draw_shafts, "horizon": self._draw_horizon, "beam": self._draw_beam}
         any_visible = False
+        wash = None                                  # haze: added after the bloom, not blurred again
         for el in reversed(song.elements):          # list top = front layer
+            if el.type == "haze" and el.id in st.elements:
+                h = self._haze(el, st, song)
+                if h is not None:
+                    wash = h if wash is None else wash + h
+                continue
             fn = drawers.get(el.type)
             if fn is None or el.id not in st.elements:      # not used by what is playing now
                 continue
@@ -202,11 +207,8 @@ class FrameRenderer:
         wide = blur(glow_src, sigma)
         gain = lk.glow_intensity * (1.0 + 0.7 * st.bloom)
         glow = cv2.addWeighted(tight, 1.1 * gain, wide, 1.9 * gain, 0.0)
-        if any_visible and lk.ambient > 0:
-            # ambient wash: a constant base, more while elements are lit, pulsing with the music
-            mean_lv = float(st.levels.mean()) if len(st.levels) else 0.0
-            k = lk.ambient * (0.05 + 0.1 * mean_lv + 0.06 * lk.ambient_pulse * st.env)
-            glow += self.ambient * np.array(_bgr(lk.main_rgb, k), np.float32)
+        if wash is not None:
+            glow += wash
         np.clip(glow, 0, 255, out=glow)
         out = cv2.add(core, cv2.resize(glow.astype(np.uint8), (self.w, self.h), interpolation=cv2.INTER_LINEAR))
         if st.blackout > 0.001:
@@ -222,6 +224,31 @@ class FrameRenderer:
         if st.lyric and st.lyric_alpha > 0.003:
             self._overlay_lyric(out, st, song)
         return out
+
+    # ---- element: haze -----------------------------------------------------------------------
+    def _haze(self, el, st: FrameState, song: Song):
+        """The soft wash of light (glow space, 1/4 res): a base, more while the other elements are lit,
+        breathing with the music. Its amount is the Haze lane level (note velocity)."""
+        _lv, _fl, amount = st.elements[el.id]
+        cx, cy = el.x * self.w, el.y * self.h
+        rw, rh = max(0.01, el.size) * self.w, max(0.01, el.height) * self.h
+        self.bboxes[el.id] = (cx - rw, cy - rh, cx + rw, min(self.h, cy + rh * 0.2))
+        if amount <= 0.002:
+            return None
+        key = (round(el.x, 3), round(el.y, 3), round(el.size, 3), round(el.height, 3), self.sw, self.sh)
+        blob = self._haze_cache.get(key)
+        if blob is None:
+            if len(self._haze_cache) > 8:
+                self._haze_cache.clear()
+            ys, xs = np.mgrid[0:self.sh, 0:self.sw].astype(np.float32)
+            g = np.exp(-(((xs - el.x * self.sw) / (self.sw * max(0.01, el.size))) ** 2 +
+                         ((el.y * self.sh - ys) / (self.sh * max(0.01, el.height))) ** 2))
+            blob = cv2.merge([g, g, g])
+            self._haze_cache[key] = blob
+        mean_lv = float(st.levels.mean()) if len(st.levels) else 0.0
+        k = el.glow * amount * (0.05 + 0.1 * mean_lv + 0.06 * el.music * st.env)
+        c = _bgr(self.element_rgb(el, song.look), k)
+        return cv2.multiply(blob, (c[0], c[1], c[2], 0.0))
 
     # ---- element: custom (user-built from shapes) -------------------------------------------
     def _draw_custom(self, layer, el, st, song):

@@ -193,10 +193,10 @@ class MotionEngine:
                     v = out.get(n.lane)
                     eid = n.lane[2:].split("|", 1)[0] if n.lane.startswith("e:") else ""
                     if v is None:
-                        out[n.lane] = [lv, gate, peak, pat.speed(eid), n]
+                        out[n.lane] = [lv, gate, peak, pat.speed(eid), n, b - os_]
                     else:
-                        if gate > v[1]:
-                            v[3], v[4] = pat.speed(eid), n     # the louder note sets speed / direction / seed
+                        if gate > v[1]:     # the louder note sets speed / direction / seed / start time
+                            v[3], v[4], v[5] = pat.speed(eid), n, b - os_
                         v[0], v[1], v[2] = max(v[0], lv), max(v[1], gate), max(v[2], peak)
 
     # ---- frame state -------------------------------------------------------------
@@ -252,12 +252,14 @@ class MotionEngine:
         b_rel = b - loop[0] if loop else b
 
         def fx_clock(sub_key):
-            """(beat pulse, 1/16 step) of an effect lane at its pattern's speed."""
+            """(beat pulse, 1/16 step) of an effect lane at its pattern's speed. The step counts from
+            the note's own start, so a Chase begins on its starting member wherever the note sits."""
             v = lanes.get(sub_key)
             sp = v[3] if v else 1.0
+            st = math.floor(v[5] * STEPS_PER_BEAT * sp + 1e-6) if v else step
             if sp == 1.0:
-                return beat_pulse, step
-            return math.exp(-((b * sp) % 1.0) * 6.0), math.floor(b_rel * STEPS_PER_BEAT * sp)
+                return beat_pulse, st
+            return math.exp(-((b * sp) % 1.0) * 6.0), st
 
         fpk = lane("fx:flash", 2)
         bloom = 1.2 * fpk if fpk > 0.002 else 0.0
@@ -312,8 +314,9 @@ class MotionEngine:
                 _, cs = fx_clock(key)
                 nt = lanes[key][4] if key in lanes else None
                 d, st0 = (nt.direction, nt.start_part) if nt else ("right", -1)
-                for j in chase_parts(cs - 1, n, d, st0):     # a fading trail one step behind
-                    levels[j] = max(levels[j], chase * 0.35)
+                if cs > 0:
+                    for j in chase_parts(cs - 1, n, d, st0):     # a fading trail one step behind
+                        levels[j] = max(levels[j], chase * 0.35)
                 for i in chase_parts(cs, n, d, st0):
                     levels[i] = max(levels[i], chase)
             if rnd > 0:

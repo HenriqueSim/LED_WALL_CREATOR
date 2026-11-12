@@ -18,10 +18,10 @@ from PyQt6.QtWidgets import (
 
 import dataclasses
 
-from ..model import CHASE_DIRS, PATTERN_COLORS, STEPS_PER_BAR, STEPS_PER_BEAT, Note, Pattern, new_id, split_lane
+from ..model import CHASE_DIRS, PATTERN_COLORS, STEPS_PER_BAR, STEPS_PER_BEAT, Note, Pattern, el_lane, new_id, split_lane
 from .common import LANE_COLORS, ColorButton, hint, roomy
 
-_CLIPBOARD: list = []   # [(Note copy, rel_start)]
+_CLIPBOARD: list = []   # [(Note copy, rel_start, rel_row)]: rows counted from the copy's top row
 _DIR_ARROW = {"right": "→", "left": "←", "bounce": "↔", "out": "⇤⇥", "in": "⇥⇤"}
 
 
@@ -45,6 +45,7 @@ class PatternGrid(QWidget):
         self.new_direction = "right"   # for new Chase notes
         self.new_seed = 1              # for new Random notes
         self.focus_eid: str | None = None   # element of the row clicked last (effect speed target)
+        self.cursor_lane: str | None = None  # row where Paste starts (click a row name / a note to set it)
         self.selected: list = []
         self.cursor_step = 0
         self.playhead_step: float | None = None
@@ -210,6 +211,8 @@ class PatternGrid(QWidget):
             r, g, b = LANE_COLORS[kind]
             base = 22 if i % 2 else 17
             p.fillRect(QRectF(self.HEADER_W, y, w, self.ROW_H), QColor(base + r // 40, base + g // 40, base + b // 40))
+            if key == self.cursor_lane:          # the paste row
+                p.fillRect(QRectF(self.HEADER_W, y, w, self.ROW_H), QColor(255, 160, 40, 26))
         grid_bottom = self.RULER_H + len(lanes) * self.ROW_H
         if self.show_wave:
             self._paint_wave(p, steps, grid_bottom)
@@ -325,6 +328,9 @@ class PatternGrid(QWidget):
                 p.drawText(QRectF(6, y, self.HEADER_W - 8, self.ROW_H), Qt.AlignmentFlag.AlignVCenter, arrow + label)
                 continue
             p.setFont(normal)
+            if key == self.cursor_lane:
+                p.fillRect(QRectF(0, y, self.HEADER_W, self.ROW_H), QColor(255, 160, 40, 40))
+                p.fillRect(QRectF(0, y + 1, 4, self.ROW_H - 2), QColor(255, 160, 40))
             p.fillRect(QRectF(14, y + 1, 3, self.ROW_H - 2), QColor(*LANE_COLORS[kind]))
             p.setPen(QColor(190, 170, 230) if kind in ("fx", "global") else QColor(220, 220, 220))
             prefix = {"group": "◆ ", "logo": "★ ", "all": "● "}.get(kind, "")
@@ -360,28 +366,52 @@ class PatternGrid(QWidget):
             self.selected = []
             self._commit()
 
+    def _all_keys(self, pat) -> list:
+        return [k for k, _, _ in self.ctl.song.lanes(pat)]
+
     def copy_selected(self):
         global _CLIPBOARD
-        if self.selected:
+        pat = self.pattern
+        if self.selected and pat:
+            keys = self._all_keys(pat)
+            rows = {n.lane: keys.index(n.lane) for n in self.selected if n.lane in keys}
+            top = min(rows.values()) if rows else 0
             s0 = min(n.start for n in self.selected)
-            _CLIPBOARD = [(dataclasses.replace(n), n.start - s0) for n in self.selected]
+            _CLIPBOARD = [(dataclasses.replace(n), n.start - s0, rows.get(n.lane, top) - top) for n in self.selected]
+            # paste starts on the same row until another row is picked
+            self.cursor_lane = keys[top] if rows else self.cursor_lane
 
-    def paste(self, at: int | None = None):
+    def paste(self, at: int | None = None, mode: str = "row"):
+        """Paste the copied notes at step `at` (default: the cursor). mode "row": the top copied row lands
+        on the cursor row (so notes from one element can go onto another, or onto other members);
+        "same": the same rows; "element": the same rows of the cursor row's element (All -> All,
+        member 3 -> member 3, Chase -> Chase...)."""
         pat = self.pattern
         if not (pat and _CLIPBOARD):
             return
         at = self.cursor_step if at is None else at
-        keys = {k for k, _, _ in self.ctl.song.lanes(pat)}
+        keys = self._all_keys(pat)
+        kset = set(keys)
+        base = keys.index(self.cursor_lane) if self.cursor_lane in kset else None
+        target_eid = split_lane(self.cursor_lane)[0] if self.cursor_lane else None
         new = []
-        for src, rel in _CLIPBOARD:
+        for src, rel, row in _CLIPBOARD:
             s = at + rel
-            if src.lane in keys and s < pat.steps:
-                n = dataclasses.replace(src, start=s, length=min(src.length, pat.steps - s))
+            if s >= pat.steps:
+                continue
+            lane = src.lane
+            if mode == "row" and base is not None:
+                lane = keys[base + row] if base + row < len(keys) else None
+            elif mode == "element" and target_eid:
+                eid, sub = split_lane(src.lane)
+                lane = el_lane(target_eid, sub) if eid else src.lane
+            if lane in kset:
+                n = dataclasses.replace(src, lane=lane, start=s, length=min(src.length, pat.steps - s))
                 pat.notes.append(n)
                 new.append(n)
         self.selected = new
         if new:
-            self.cursor_step = min(pat.steps - 1, at + max(r + c.length for c, r in _CLIPBOARD))
+            self.cursor_step = min(pat.steps - 1, at + max(r + c.length for c, r, _ in _CLIPBOARD))
             self._commit()
 
     def duplicate_selected(self):
@@ -391,7 +421,7 @@ class PatternGrid(QWidget):
             span = end - start
             span = int(math.ceil(span / self.snap) * self.snap)
             self.copy_selected()
-            self.paste(start + span)
+            self.paste(start + span, mode="same")
 
     def set_selected_velocity(self, v: float):
         if self.selected:
@@ -421,6 +451,9 @@ class PatternGrid(QWidget):
             if ev.button() == Qt.MouseButton.LeftButton:
                 self.toggle_folder(lanes[li][0][5:])
             return
+        if ev.button() == Qt.MouseButton.LeftButton and lanes[li][0] != self.cursor_lane:
+            self.cursor_lane = lanes[li][0]     # the row Paste starts on
+            self.update()
         if not pat or pos.x() < self.HEADER_W:
             return
         stepf = self.step_at(pos.x())
@@ -568,7 +601,7 @@ class PatternGrid(QWidget):
             self.copy_selected()
             self.delete_selected()
         elif ctrl and k == Qt.Key.Key_V:
-            self.paste()
+            self.paste(mode="element" if mods & Qt.KeyboardModifier.ShiftModifier else "row")
         elif ctrl and k == Qt.Key.Key_D:
             self.duplicate_selected()
         elif k in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self.selected and pat:
@@ -577,6 +610,12 @@ class PatternGrid(QWidget):
                 for n in self.selected:
                     n.start += d
                 self._commit("nudge")
+        elif k in (Qt.Key.Key_Up, Qt.Key.Key_Down) and not self.selected and pat:
+            keys = self.edit_keys()            # no notes selected: move the paste row
+            if keys:
+                i = keys.index(self.cursor_lane) if self.cursor_lane in keys else 0
+                self.cursor_lane = keys[max(0, min(len(keys) - 1, i + (-1 if k == Qt.Key.Key_Up else 1)))]
+                self.update()
         elif k in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self.selected:
             keys = self.edit_keys()
             d = -1 if k == Qt.Key.Key_Up else 1
@@ -694,6 +733,9 @@ class PatternTab(QWidget):
         tips = hint("ⓘ  Mouse & keyboard (hover)")
         tips.setToolTip("Drag on empty cells to draw · drag a note to move · drag its right edge to resize\n"
                         "Right-click / double-click deletes · Shift-drag selects · Ctrl+C / X / V / D\n"
+                        "Paste lands on the row you click last (its name, or a note): copy notes from one element\n"
+                        "and paste them onto another or onto other members · Ctrl+Shift+V pastes onto the same\n"
+                        "rows of the clicked row's element (All → All, Chase → Chase...) · ↑ / ↓ move the paste row\n"
                         "Arrows nudge · Ctrl+wheel zooms · Ctrl+Z undo · click a folder row to fold it\n"
                         "Click / drag the ruler (bar numbers) to move the playhead · double-click a pattern to rename")
         ll.addWidget(tips)

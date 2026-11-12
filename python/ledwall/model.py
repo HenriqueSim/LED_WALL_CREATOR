@@ -188,6 +188,7 @@ class Clip:
     track: int
     start: float          # beats from the song grid origin
     length: float         # beats; longer than the pattern = pattern loops
+    muted: list = field(default_factory=list)   # element ids (and "global") switched off in this clip only
 
 
 @dataclass

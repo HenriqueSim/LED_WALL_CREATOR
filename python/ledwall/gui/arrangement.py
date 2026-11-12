@@ -7,17 +7,36 @@ import copy
 import math
 
 import numpy as np
-from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
-    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMenu,
+    QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from ..model import BEATS_PER_BAR, N_TRACKS, STEPS_PER_BEAT, Clip, LyricClip, new_id
+from ..model import BEATS_PER_BAR, N_TRACKS, STEPS_PER_BEAT, Clip, LyricClip, new_id, split_lane
+
+GLOBAL_KEY = "global"     # Clip.muted entry for the global effects (sparkle, flash, blackout, band name)
+
+
+def clip_elements(song, clip) -> list:
+    """[(key, label)] that can be switched off in a clip: its pattern's elements and the global effects."""
+    pat = song.pattern(clip.pattern_id)
+    if not pat:
+        return []
+    return [(e.id, e.name) for e in song.pattern_elements(pat)] + [(GLOBAL_KEY, "Global effects")]
+
+
+def toggle_clip_element(clips, key: str, on: bool):
+    for c in clips:
+        if on and key in c.muted:
+            c.muted.remove(key)
+        elif not on and key not in c.muted:
+            c.muted.append(key)
 from .common import hint
 
-_CLIP_CLIPBOARD: list = []   # [("clip", pattern_id, track, rel_start, length) | ("lyric", text, rel_start, length)]
+_CLIP_CLIPBOARD: list = []   # [("clip", pattern_id, track, rel_start, length, muted) | ("lyric", text, rel_start, length)]
 
 
 class ArrangementView(QWidget):
@@ -25,6 +44,7 @@ class ArrangementView(QWidget):
     editPattern = pyqtSignal(str, float, float)   # pattern id, step inside the pattern, song time
     regionChanged = pyqtSignal()
     audioMoved = pyqtSignal()                     # the audio was dragged (bar 1 offset changed)
+    selectionChanged = pyqtSignal()
 
     HEADER_W = 96
     RULER_H = 22
@@ -44,6 +64,7 @@ class ArrangementView(QWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumHeight(self.RULER_H + self.WAVE_H + N_TRACKS * self.TRACK_H + self.LYRIC_H + 4)
+        self._last_sel: list = []
 
     # ---- geometry ---------------------------------------------------------------------
     @property
@@ -142,6 +163,10 @@ class ArrangementView(QWidget):
 
     # ---- painting -------------------------------------------------------------------------------
     def paintEvent(self, _ev):
+        ids = [id(i) for i in self.selected]
+        if ids != self._last_sel:             # every selection change ends in a repaint
+            self._last_sel = ids
+            QTimer.singleShot(0, self.selectionChanged.emit)
         p = QPainter(self)
         w, h = self.width(), self.height()
         song, eng = self.ctl.song, self.eng
@@ -247,6 +272,8 @@ class ArrangementView(QWidget):
                     for nt in pat.notes:
                         if nt.lane not in lanes:
                             continue
+                        if c.muted and (split_lane(nt.lane)[0] or GLOBAL_KEY) in c.muted:
+                            continue      # switched off in this clip
                         sb = base_b + nt.start / STEPS_PER_BEAT
                         if sb >= c.start + c.length:
                             continue
@@ -260,7 +287,9 @@ class ArrangementView(QWidget):
                         p.drawLine(QPointF(xk, r.top()), QPointF(xk, r.bottom()))
                         p.setPen(Qt.PenStyle.NoPen)
             p.setPen(QColor(0, 0, 0))
-            p.drawText(QRectF(r.left() + 3, r.top(), r.width() - 4, 13), Qt.AlignmentFlag.AlignVCenter, pat.name)
+            n_off = len([k for k in c.muted if k == GLOBAL_KEY or pat.uses(k)])
+            p.drawText(QRectF(r.left() + 3, r.top(), r.width() - 4, 13), Qt.AlignmentFlag.AlignVCenter,
+                       pat.name + (f"  · {n_off} off" if n_off else ""))
             p.setPen(QPen(QColor(255, 255, 255), 2) if c in self.selected else QPen(QColor(cr, cg, cb), 1))
             p.drawRect(r)
         p.setOpacity(1.0)
@@ -347,7 +376,7 @@ class ArrangementView(QWidget):
         if not self.selected:
             return
         s0 = min(i.start for i in self.selected)
-        _CLIP_CLIPBOARD = [("clip", i.pattern_id, i.track, i.start - s0, i.length) if isinstance(i, Clip)
+        _CLIP_CLIPBOARD = [("clip", i.pattern_id, i.track, i.start - s0, i.length, list(i.muted)) if isinstance(i, Clip)
                            else ("lyric", i.text, i.start - s0, i.length) for i in self.selected]
 
     def paste(self, at_beat: float | None = None):
@@ -359,7 +388,7 @@ class ArrangementView(QWidget):
         song = self.ctl.song
         for item in _CLIP_CLIPBOARD:
             if item[0] == "clip" and song.pattern(item[1]):
-                c = Clip(new_id(), item[1], item[2], at_beat + item[3], item[4])
+                c = Clip(new_id(), item[1], item[2], at_beat + item[3], item[4], list(item[5]))
                 song.clips.append(c)
                 new.append(c)
             elif item[0] == "lyric":
@@ -581,6 +610,12 @@ class ArrangementView(QWidget):
             a_edit = m.addAction("Edit pattern")
             a_uniq = m.addAction("Make unique (own copy of the pattern)")
             a_fit = m.addAction("Reset length to one pattern loop")
+            sub = m.addMenu("Elements playing in this clip")
+            for key, label in clip_elements(self.ctl.song, item):
+                act = sub.addAction(label)
+                act.setCheckable(True)
+                act.setChecked(key not in item.muted)
+                act.toggled.connect(lambda on, k=key: self._toggle_element(k, on))
         chosen = m.exec(gpos)
         if chosen is None:
             return
@@ -597,6 +632,11 @@ class ArrangementView(QWidget):
             if pat:
                 item.length = pat.beats
                 self._commit()
+
+    def _toggle_element(self, key: str, on: bool):
+        toggle_clip_element([c for c in self.selected if isinstance(c, Clip)], key, on)
+        self._commit()
+        self.update()
 
     def wheelEvent(self, ev):
         delta = ev.angleDelta().y() or ev.angleDelta().x()
@@ -773,6 +813,16 @@ class MasterTab(QWidget):
             b.clicked.connect(fn)
             row.addWidget(b)
         ll.addLayout(row)
+        self.g_clip = QGroupBox("Elements playing in this clip")
+        gcl = QVBoxLayout(self.g_clip)
+        self.clip_elements = QListWidget()
+        self.clip_elements.setMinimumHeight(96)
+        self.clip_elements.setMaximumHeight(150)
+        self.clip_elements.itemChanged.connect(self._on_clip_element)
+        gcl.addWidget(self.clip_elements)
+        gcl.addWidget(hint("Untick to switch it off in this clip only (the pattern stays as it is)."))
+        self.g_clip.hide()
+        ll.addWidget(self.g_clip)
         b_lyric = QPushButton("Add lyric at playhead…")
         b_lyric.clicked.connect(lambda: self.view.add_lyric(self.view.snap_b(self.ctl.engine.t2b(self.get_playhead()), "floor")))
         ll.addWidget(b_lyric)
@@ -803,6 +853,7 @@ class MasterTab(QWidget):
         self.view.editPattern.connect(self.editPatternRequested.emit)
         self.view.regionChanged.connect(self._update_region_label)
         self.view.audioMoved.connect(self._load_tempo)
+        self.view.selectionChanged.connect(self._load_clip_elements)
         self.tempo_bar = TempoBar(ctl)
         self.tempo_bar.changed.connect(self.view.update)
 
@@ -814,12 +865,50 @@ class MasterTab(QWidget):
         rl.addWidget(self.tempo_bar)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
-        lay.addWidget(left)
+        side = QScrollArea()               # the side panel scrolls when the window is short
+        side.setWidget(left)
+        side.setWidgetResizable(True)
+        side.setFixedWidth(left.width() + 14)
+        side.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        side.setFrameShape(QScrollArea.Shape.NoFrame)
+        lay.addWidget(side)
         lay.addWidget(right, 1)
         ctl.changed.connect(self._on_changed)
         ctl.currentPatternChanged.connect(self._select_combo)
         self._reload_patterns()
         self._update_region_label()
+
+    def _sel_clips(self) -> list:
+        return [c for c in self.view.selected if isinstance(c, Clip)]
+
+    def _load_clip_elements(self):
+        clips = self._sel_clips()
+        self.g_clip.setVisible(bool(clips))
+        if not clips:
+            return
+        self.clip_elements.blockSignals(True)
+        self.clip_elements.clear()
+        seen = []
+        for c in clips:
+            for key, label in clip_elements(self.ctl.song, c):
+                if key not in [k for k, _ in seen]:
+                    seen.append((key, label))
+        for key, label in seen:
+            it = QListWidgetItem(label)
+            it.setData(Qt.ItemDataRole.UserRole, key)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            on = all(key not in c.muted for c in clips)
+            it.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+            self.clip_elements.addItem(it)
+        self.clip_elements.blockSignals(False)
+        self.g_clip.setTitle("Elements playing in this clip" if len(clips) == 1 else
+                             f"Elements playing in these {len(clips)} clips")
+
+    def _on_clip_element(self, it):
+        toggle_clip_element(self._sel_clips(), it.data(Qt.ItemDataRole.UserRole),
+                            it.checkState() == Qt.CheckState.Checked)
+        self.ctl.commit("arrangement")
+        self.view.update()
 
     def _reload_patterns(self):
         self.combo_pat.blockSignals(True)
@@ -879,6 +968,8 @@ class MasterTab(QWidget):
         self.tempo_bar.reload()
 
     def _on_changed(self, kind):
+        if kind in ("all", "arrangement", "patterns", "elements"):
+            self._load_clip_elements()
         if kind in ("all", "audio", "look", "arrangement"):
             self.tempo_bar.reload()
         if kind in ("all", "patterns"):

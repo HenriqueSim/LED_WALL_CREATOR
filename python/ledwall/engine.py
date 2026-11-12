@@ -126,7 +126,7 @@ class MotionEngine:
         if self.audition_pattern:
             p = song.pattern(self.audition_pattern)
             if p:
-                yield -1e9, 1e9, p, 0.0
+                yield -1e9, 1e9, p, 0.0, ()
             return
         tail = 8.0  # beats of release tail after a clip ends
         muted = song.muted_tracks
@@ -141,7 +141,7 @@ class MotionEngine:
             if cs <= b < ce + tail:
                 p = song.pattern(c.pattern_id)
                 if p and p.notes:
-                    yield cs, ce, p, c.start
+                    yield cs, ce, p, c.start, c.muted
 
     def lane_values(self, b: float, loop=None) -> dict:
         """lane -> [level, gate, peak]. With `loop` (start, end beats) the region is treated as
@@ -157,12 +157,16 @@ class MotionEngine:
 
     def _accumulate(self, out: dict, b: float, window):
         period = self.period
-        for cs, ce, pat, origin in self._active_sources(b, window):
+        for cs, ce, pat, origin, muted in self._active_sources(b, window):
             plen = pat.beats
             local = b - origin
             for n in pat.notes:
-                if n.lane.startswith("e:") and pat.elements is not None and split_lane(n.lane)[0] not in pat.elements:
-                    continue        # the pattern doesn't use that element (its notes are kept, silent)
+                if n.lane.startswith("e:"):
+                    eid = split_lane(n.lane)[0]
+                    if (pat.elements is not None and eid not in pat.elements) or eid in muted:
+                        continue    # the pattern doesn't use that element, or this clip switched it off
+                elif muted and "global" in muted:
+                    continue        # this clip switched the global effects off
                 atk, rel, pdec = self._env_params(n.lane)
                 sb, lb = n.start / STEPS_PER_BEAT, n.length / STEPS_PER_BEAT
                 kmax = math.ceil((ce - origin - sb) / plen) - 1          # last occurrence starting inside
@@ -270,8 +274,8 @@ class MotionEngine:
             used: set = set()
             probes = (b, b + (loop[1] - loop[0])) if loop else (b,)     # loops wrap release tails around
             for bb in probes:
-                for _cs, _ce, pat, _o in self._active_sources(bb, loop):
-                    used |= {e.id for e in song.pattern_elements(pat)}
+                for _cs, _ce, pat, _o, muted in self._active_sources(bb, loop):
+                    used |= {e.id for e in song.pattern_elements(pat) if e.id not in muted}
             in_scene = [e for e in song.elements if e.id in used]
         for el in in_scene:
             def L(sub, idx=0, _e=el.id):

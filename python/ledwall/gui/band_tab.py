@@ -13,6 +13,19 @@ from PyQt6.QtWidgets import (
 from ..model import Member, new_group, new_id
 from .common import hint
 
+_COPIED_MEMBERS: dict = {}   # {"n": member count, "names": [...]}
+_COPIED_GROUPS: dict = {}    # {"n": source member count, "groups": [group dicts]}
+
+
+def map_parts(parts, n_src: int, n_dst: int) -> list:
+    """A group's members on an element with n_src members, carried onto one with n_dst: the same
+    members when the counts match, else the same stretch of the element (left half stays left half)."""
+    if n_src == n_dst:
+        return [i for i in parts if i < n_dst]
+    src = set(parts)
+    return [j for j in range(n_dst) if int(j * n_src / max(1, n_dst)) in src]
+
+
 PART_WORD = {"polygon": "side", "custom": "shape", "bars": "bar", "shafts": "shaft", "ring": "arc", "sun": "piece"}
 
 
@@ -56,6 +69,17 @@ class BandTab(QWidget):
         row.addWidget(self.btn_add_member)
         row.addWidget(self.btn_rm_member)
         ml.addLayout(row)
+        row_c = QHBoxLayout()
+        b = QPushButton("Copy members")
+        b.setToolTip("Copy this element's members (how many, and their names) to paste onto another element.")
+        b.clicked.connect(self.copy_members)
+        row_c.addWidget(b)
+        self.btn_paste_members = QPushButton("Paste members")
+        self.btn_paste_members.setToolTip("Give this element the copied members: the same number (bars / sides...) "
+                                          "and names.")
+        self.btn_paste_members.clicked.connect(self.paste_members)
+        row_c.addWidget(self.btn_paste_members)
+        ml.addLayout(row_c)
         self.lbl_mem_hint = hint("")
         ml.addWidget(self.lbl_mem_hint)
 
@@ -76,6 +100,19 @@ class BandTab(QWidget):
         row2.addWidget(self.btn_add_group)
         row2.addWidget(self.btn_rm_group)
         left.addLayout(row2)
+        row2c = QHBoxLayout()
+        for text, tip, fn in (("Copy", "Copy the selected group", lambda: self.copy_groups(False)),
+                              ("Copy all", "Copy all of this element's groups", lambda: self.copy_groups(True)),
+                              ("Paste", "Add the copied groups to this element (an element with a different number "
+                                        "of members gets the same stretch: a left half stays the left half)",
+                               self.paste_groups)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            if text == "Paste":
+                self.btn_paste_groups = b
+            row2c.addWidget(b)
+        left.addLayout(row2c)
         right = QVBoxLayout()
         right.addWidget(QLabel("Members in this group:"))
         self.group_parts = QListWidget()
@@ -194,6 +231,8 @@ class BandTab(QWidget):
         self.groups.setCurrentRow(min(row, self.groups.count() - 1))
         self.btn_add_group.setEnabled(el is not None)
         self.btn_rm_group.setEnabled(self.groups.count() > 0)
+        self.btn_paste_groups.setEnabled(el is not None and bool(_COPIED_GROUPS))
+        self.btn_paste_members.setEnabled(bool(el and _COPIED_MEMBERS))
         self._updating = False
         self._load_group_parts()
         self.highlightChanged.emit()
@@ -245,6 +284,32 @@ class BandTab(QWidget):
         if self.ctl.song.remove_part(el, i):
             self.ctl.commit("elements")
 
+    def copy_members(self):
+        el = self.element()
+        if el:
+            _COPIED_MEMBERS.clear()
+            _COPIED_MEMBERS.update(n=el.part_count(), names=[el.member_name(i) for i in range(el.part_count())])
+            self._load_element()
+
+    def paste_members(self):
+        el = self.element()
+        if not (el and _COPIED_MEMBERS):
+            return
+        n = _COPIED_MEMBERS["n"]
+        song = self.ctl.song
+        if el.can_resize() and n < el.part_count() and QMessageBox.question(
+                self, "Paste members", f"{el.name} goes from {el.part_count()} to {n} members: the notes of the "
+                f"last {el.part_count() - n} are removed. Continue?") != QMessageBox.StandardButton.Yes:
+            return
+        if el.can_resize():      # match the number of members (removing from the end drops their notes)
+            while el.part_count() < n and song.add_part(el):
+                pass
+            while el.part_count() > n and song.remove_part(el, el.part_count() - 1):
+                pass
+        names = _COPIED_MEMBERS["names"][:el.part_count()]
+        el.part_names = [nm if not nm.startswith("Member ") else "" for nm in names]
+        self.ctl.commit("elements")
+
     def _rename_member(self, it):
         if self._updating:
             return
@@ -272,6 +337,25 @@ class BandTab(QWidget):
         if not el:
             return
         el.groups.append(new_group(f"Group {len(el.groups) + 1}"))
+        self.ctl.commit("band")
+        self.groups.setCurrentRow(self.groups.count() - 1)
+
+    def copy_groups(self, everything: bool):
+        el = self.element()
+        if not el:
+            return
+        gs = el.groups if everything else [g for g in [self._current_group()] if g]
+        if gs:
+            _COPIED_GROUPS.clear()
+            _COPIED_GROUPS.update(n=el.part_count(), groups=[dict(g) for g in gs])
+            self._load_element()
+
+    def paste_groups(self):
+        el = self.element()
+        if not (el and _COPIED_GROUPS):
+            return
+        for g in _COPIED_GROUPS["groups"]:
+            el.groups.append(new_group(g["name"], map_parts(g["parts"], _COPIED_GROUPS["n"], el.part_count())))
         self.ctl.commit("band")
         self.groups.setCurrentRow(self.groups.count() - 1)
 

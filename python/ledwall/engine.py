@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .audio import AudioAnalysis
-from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, el_lane, part_owners, split_lane
+from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, chase_parts, el_lane, part_owners, split_lane
 
 
 @dataclass
@@ -187,11 +187,12 @@ class MotionEngine:
                         gate = 0.0
                     peak = n.velocity * math.exp(-age / pdec) if pdec > 0 and os_ >= cs else 0.0
                     v = out.get(n.lane)
+                    eid = n.lane[2:].split("|", 1)[0] if n.lane.startswith("e:") else ""
                     if v is None:
-                        out[n.lane] = [lv, gate, peak, pat.fx_speed]
+                        out[n.lane] = [lv, gate, peak, pat.speed(eid), n]
                     else:
                         if gate > v[1]:
-                            v[3] = pat.fx_speed       # the louder pattern sets the effect speed
+                            v[3], v[4] = pat.speed(eid), n     # the louder note sets speed / direction / seed
                         v[0], v[1], v[2] = max(v[0], lv), max(v[1], gate), max(v[2], peak)
 
     # ---- frame state -------------------------------------------------------------
@@ -303,16 +304,20 @@ class MotionEngine:
                 levels = np.maximum(levels, pulse * (0.2 + 0.8 * bp))
                 bloom += 0.35 * pulse * bp / max(1, len(song.elements))
             if chase > 0 and n:
-                _, cs = fx_clock(el_lane(el.id, "chase"))
-                i = cs % n
-                levels[i] = max(levels[i], chase)
-                j = (cs - 1) % n
-                levels[j] = max(levels[j], chase * 0.35)
+                key = el_lane(el.id, "chase")
+                _, cs = fx_clock(key)
+                d = lanes[key][4].direction if key in lanes else "right"
+                for j in chase_parts(cs - 1, n, d):     # a fading trail one step behind
+                    levels[j] = max(levels[j], chase * 0.35)
+                for i in chase_parts(cs, n, d):
+                    levels[i] = max(levels[i], chase)
             if rnd > 0:
-                _, rs = fx_clock(el_lane(el.id, "random"))
+                key = el_lane(el.id, "random")
+                _, rs = fx_clock(key)
+                sd = 0x5EED + 7919 * (int(lanes[key][4].seed if key in lanes else 1) - 1)   # seed 1 = the original
                 for i in range(n):
-                    if _hash01(rs, i) < 0.45:
-                        levels[i] = max(levels[i], rnd * (0.55 + 0.45 * _hash01(rs, i + 101)))
+                    if _hash01(rs, i, sd) < 0.45:
+                        levels[i] = max(levels[i], rnd * (0.55 + 0.45 * _hash01(rs, i + 101, sd)))
             # audio reactivity on whatever is lit: low parts on the left, highs on the right
             if n and lk.audio_react > 0 and hl is None:
                 pb = np.interp(np.linspace(0, len(bands_s) - 1, n), np.arange(len(bands_s)), bands_s)

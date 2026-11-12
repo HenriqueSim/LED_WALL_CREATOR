@@ -25,6 +25,32 @@ ELEMENT_FX = [
     ("random",   "Random",      "Random parts flicker every 1/16"),
     ("strobe",   "Strobe",      "Fast flashes (rate in Look tab)"),
 ]
+CHASE_DIRS = [("right", "→  Left to right"), ("left", "←  Right to left"), ("bounce", "↔  Bounce"),
+              ("out", "⇤⇥  Centre out"), ("in", "⇥⇤  Outside in")]
+
+
+def chase_parts(step: int, n: int, direction: str) -> list:
+    """The parts (indices) a Chase lights at a 1/16 step, for an element with n parts."""
+    if n <= 0:
+        return []
+    if direction == "left":
+        return [n - 1 - step % n]
+    if direction == "bounce":
+        if n == 1:
+            return [0]
+        k = step % (2 * n - 2)
+        return [k if k < n else 2 * n - 2 - k]
+    if direction in ("out", "in"):
+        half = (n + 1) // 2
+        k = step % half
+        if direction == "in":
+            k = half - 1 - k
+        lo = (n - 1) // 2 - k          # odd n: both start on the centre part
+        hi = n // 2 + k
+        return sorted({lo, hi})
+    return [step % n]
+
+
 GLOBAL_FX = [
     ("sparkle",  "Sparkle",     "Small glints across the wall"),
     ("flash",    "Flash Peak",  "Bloom burst in the accent colour on whatever is in the scene"),
@@ -125,6 +151,8 @@ class Note:
     start: int           # in steps (1/16)
     length: int          # in steps
     velocity: float = 1.0
+    direction: str = "right"   # Chase notes: right | left | bounce | out (centre out) | in (outside in)
+    seed: int = 1              # Random notes: which random sequence (same seed = same flicker)
 
 
 @dataclass
@@ -135,7 +163,11 @@ class Pattern:
     color: tuple = (255, 160, 40)
     notes: list = field(default_factory=list)
     elements: list | None = None     # ids of the song's elements this pattern uses (None = all of them)
-    fx_speed: float = 1.0            # Pulse / Chase / Random / Strobe speed: 0.25 .. 4 x the song tempo
+    fx_speed: float = 1.0            # old: one effect speed for the whole pattern (moved to fx_speeds)
+    fx_speeds: dict = field(default_factory=dict)   # element id -> Pulse / Chase / Random / Strobe speed (x tempo)
+
+    def speed(self, eid: str) -> float:
+        return float(self.fx_speeds.get(eid, 1.0))
 
     def uses(self, eid: str) -> bool:
         return self.elements is None or eid in self.elements
@@ -485,7 +517,8 @@ class Song:
         # before per-pattern elements: every pattern used the elements switched on for the project
         old_on = [e.id for e in elements if e.visible]
         patterns = [Pattern(id=p["id"], name=p["name"], bars=p.get("bars", 1), color=tup(p.get("color", (255, 160, 40))),
-                            fx_speed=float(p.get("fx_speed", 1.0)),
+                            fx_speeds={k: float(v) for k, v in p.get("fx_speeds", {}).items()} or
+                            ({e.id: float(p["fx_speed"]) for e in elements} if p.get("fx_speed", 1.0) != 1.0 else {}),
                             notes=[Note(**n) for n in p.get("notes", [])],
                             elements=list(p["elements"]) if p.get("elements") is not None else
                             (None if "elements" in p else list(old_on)))

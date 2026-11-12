@@ -16,10 +16,13 @@ from PyQt6.QtWidgets import (
     QPushButton, QScrollArea, QScrollBar, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from ..model import PATTERN_COLORS, STEPS_PER_BAR, STEPS_PER_BEAT, Note, Pattern, new_id
+import dataclasses
+
+from ..model import CHASE_DIRS, PATTERN_COLORS, STEPS_PER_BAR, STEPS_PER_BEAT, Note, Pattern, new_id, split_lane
 from .common import LANE_COLORS, ColorButton, hint, roomy
 
-_CLIPBOARD: list = []   # [(lane, rel_start, length, velocity)]
+_CLIPBOARD: list = []   # [(Note copy, rel_start)]
+_DIR_ARROW = {"right": "→", "left": "←", "bounce": "↔", "out": "⇤⇥", "in": "⇥⇤"}
 
 
 class PatternGrid(QWidget):
@@ -39,6 +42,9 @@ class PatternGrid(QWidget):
         self.scroll_x = 0.0
         self.snap = 1             # steps
         self.new_velocity = 0.9
+        self.new_direction = "right"   # for new Chase notes
+        self.new_seed = 1              # for new Random notes
+        self.focus_eid: str | None = None   # element of the row clicked last (effect speed target)
         self.selected: list = []
         self.cursor_step = 0
         self.playhead_step: float | None = None
@@ -272,6 +278,12 @@ class PatternGrid(QWidget):
                 else:
                     p.setPen(QPen(QColor(0, 0, 0, 120), 1))
                     p.drawRect(rect)
+                sub = split_lane(n.lane)[1]
+                tag = _DIR_ARROW.get(n.direction, "→") if sub == "chase" else (f"#{n.seed}" if sub == "random" else "")
+                if tag and rect.width() > 16:
+                    p.setPen(QColor(0, 0, 0, 200))
+                    p.setFont(QFont("Sans", 8, QFont.Weight.Bold))
+                    p.drawText(rect.adjusted(5, 0, -2, 0), Qt.AlignmentFlag.AlignVCenter, tag)
 
         # bar that was double-clicked on the master track
         if self.highlight_bar is not None and self.highlight_bar * STEPS_PER_BAR < steps:
@@ -352,7 +364,7 @@ class PatternGrid(QWidget):
         global _CLIPBOARD
         if self.selected:
             s0 = min(n.start for n in self.selected)
-            _CLIPBOARD = [(n.lane, n.start - s0, n.length, n.velocity) for n in self.selected]
+            _CLIPBOARD = [(dataclasses.replace(n), n.start - s0) for n in self.selected]
 
     def paste(self, at: int | None = None):
         pat = self.pattern
@@ -361,15 +373,15 @@ class PatternGrid(QWidget):
         at = self.cursor_step if at is None else at
         keys = {k for k, _, _ in self.ctl.song.lanes(pat)}
         new = []
-        for lane, rel, ln, vel in _CLIPBOARD:
+        for src, rel in _CLIPBOARD:
             s = at + rel
-            if lane in keys and s < pat.steps:
-                n = Note(lane, s, min(ln, pat.steps - s), vel)
+            if src.lane in keys and s < pat.steps:
+                n = dataclasses.replace(src, start=s, length=min(src.length, pat.steps - s))
                 pat.notes.append(n)
                 new.append(n)
         self.selected = new
         if new:
-            self.cursor_step = min(pat.steps - 1, at + max(r + l for _, r, l, _ in _CLIPBOARD))
+            self.cursor_step = min(pat.steps - 1, at + max(r + c.length for c, r in _CLIPBOARD))
             self._commit()
 
     def duplicate_selected(self):
@@ -401,6 +413,10 @@ class PatternGrid(QWidget):
         li = self.lane_at(pos.y())
         if not (0 <= li < len(lanes)):
             return
+        row_eid = lanes[li][0][5:] if lanes[li][2] == "folder" else split_lane(lanes[li][0])[0]
+        if row_eid != "global" and row_eid != self.focus_eid:
+            self.focus_eid = row_eid
+            self.selectionChanged.emit()
         if lanes[li][2] == "folder":            # click a folder row to fold / unfold it
             if ev.button() == Qt.MouseButton.LeftButton:
                 self.toggle_folder(lanes[li][0][5:])
@@ -451,7 +467,8 @@ class PatternGrid(QWidget):
         if s >= pat.steps:
             return
         self.cursor_step = s
-        n = Note(lanes[li][0], s, min(self.snap, pat.steps - s), self.new_velocity)
+        n = Note(lanes[li][0], s, min(self.snap, pat.steps - s), self.new_velocity,
+                 direction=self.new_direction, seed=self.new_seed)
         pat.notes.append(n)
         self.selected = [n]
         self.selectionChanged.emit()
@@ -625,10 +642,29 @@ class PatternTab(QWidget):
         self.combo_speed = QComboBox()
         for label, v in self.SPEEDS:
             self.combo_speed.addItem(label, v)
-        self.combo_speed.setToolTip("How fast Pulse, Chase, Random and Strobe run in this pattern, relative to the "
-                                    "song's tempo: ½× for a half-time section, 2× for double time.")
+        self.combo_speed.setToolTip("How fast Pulse, Chase, Random and Strobe run on the selected element in this "
+                                    "pattern (the element of the selected notes, or of the row clicked last), "
+                                    "relative to the song's tempo: ½× for half time, 2× for double time.")
         self.combo_speed.currentIndexChanged.connect(self._on_speed)
         form.addRow("Effect speed", self.combo_speed)
+        self.lbl_speed_for = QLabel()
+        self.lbl_speed_for.setObjectName("hint")
+        self.lbl_speed_for.setWordWrap(True)
+        form.addRow("", self.lbl_speed_for)
+        self.combo_dir = QComboBox()
+        for key, label in CHASE_DIRS:
+            self.combo_dir.addItem(label, key)
+        self.combo_dir.setToolTip("Which way the selected Chase notes run across the element (also used for new "
+                                  "Chase notes).")
+        self.combo_dir.currentIndexChanged.connect(self._on_direction)
+        form.addRow("Chase direction", self.combo_dir)
+        self.spin_seed = QSpinBox()
+        self.spin_seed.setRange(1, 999)
+        self.spin_seed.setToolTip("Which random flicker the selected Random notes play. Give two similar elements "
+                                  "different seeds to make them flicker differently; the same seed = the same "
+                                  "flicker. Also used for new Random notes.")
+        self.spin_seed.valueChanged.connect(self._on_seed)
+        form.addRow("Random seed", self.spin_seed)
         ll.addLayout(form)
         self.lbl_elements = QLabel()
         self.lbl_elements.setObjectName("hint")
@@ -640,7 +676,7 @@ class PatternTab(QWidget):
                                  "one under the playhead). A pattern not on the master track loops on its own.")
         self.chk_loop.toggled.connect(self.loopSectionChanged.emit)
         ll.addWidget(self.chk_loop)
-        self.chk_wave = QCheckBox("Show the song's waveform behind the lanes")
+        self.chk_wave = QCheckBox("Show the song's waveform")
         self.chk_wave.setChecked(True)
         self.chk_wave.setToolTip("The audio where this pattern sits on the master track: the waveform in blue and the "
                                  "low end (kick / bass) in orange from the bottom, to place hits on the band's beats.")
@@ -708,13 +744,11 @@ class PatternTab(QWidget):
         p = self.ctl.current_pattern
         self._updating = True
         self.spin_bars.setEnabled(p is not None)
-        self.combo_speed.setEnabled(p is not None)
         if p:
             self.spin_bars.setValue(p.bars)
             self.btn_color.set_rgb(p.color)
-            i = self.combo_speed.findData(p.fx_speed)
-            self.combo_speed.setCurrentIndex(i if i >= 0 else 2)
         self._updating = False
+        self._load_note_props()
         self.grid.selected = []
         self.grid.highlight_bar = None
         self.grid.refresh_size()
@@ -783,13 +817,76 @@ class PatternTab(QWidget):
         self.ctl.commit("patterns")
         self.ctl.currentPatternChanged.emit(self.ctl.current_pattern_id or "")
 
+    def _speed_targets(self) -> list:
+        """Elements the Effect speed applies to: those of the selected notes, else the row clicked last."""
+        p = self.ctl.current_pattern
+        if not p:
+            return []
+        song = self.ctl.song
+        ids = []
+        for n in self.grid.selected:
+            eid = split_lane(n.lane)[0]
+            if eid and eid not in ids:
+                ids.append(eid)
+        if not ids and self.grid.focus_eid:
+            ids = [self.grid.focus_eid]
+        return [e for e in (song.element(i) for i in ids) if e is not None and p.uses(e.id)]
+
+    def _load_note_props(self):
+        """Speed / chase direction / random seed controls for the current selection."""
+        p = self.ctl.current_pattern
+        self._updating = True
+        els = self._speed_targets()
+        self.combo_speed.setEnabled(bool(els))
+        if els:
+            i = self.combo_speed.findData(p.speed(els[0].id))
+            self.combo_speed.setCurrentIndex(i if i >= 0 else 2)
+            self.lbl_speed_for.setText("for " + ", ".join(e.name for e in els))
+        else:
+            self.combo_speed.setCurrentIndex(2)
+            self.lbl_speed_for.setText("click a note or row of an element")
+        subs = [split_lane(n.lane)[1] for n in self.grid.selected]
+        chase = [n for n, s in zip(self.grid.selected, subs) if s == "chase"]
+        rnd = [n for n, s in zip(self.grid.selected, subs) if s == "random"]
+        self.combo_dir.setCurrentIndex(max(0, self.combo_dir.findData(chase[0].direction if chase else self.grid.new_direction)))
+        self.spin_seed.setValue(rnd[0].seed if rnd else self.grid.new_seed)
+        self._updating = False
+
     def _on_speed(self, i):
         p = self.ctl.current_pattern
         v = self.combo_speed.itemData(i)
-        if self._updating or not p or v is None or v == p.fx_speed:
+        els = self._speed_targets()
+        if self._updating or not p or v is None or not els:
             return
-        p.fx_speed = float(v)
+        for e in els:
+            if float(v) == 1.0:
+                p.fx_speeds.pop(e.id, None)
+            else:
+                p.fx_speeds[e.id] = float(v)
         self.ctl.commit("pattern", "fx_speed")
+
+    def _on_direction(self, i):
+        d = self.combo_dir.itemData(i)
+        if self._updating or d is None:
+            return
+        self.grid.new_direction = d
+        notes = [n for n in self.grid.selected if split_lane(n.lane)[1] == "chase"]
+        for n in notes:
+            n.direction = d
+        if notes:
+            self.ctl.commit("pattern", "direction")
+            self.grid.update()
+
+    def _on_seed(self, v):
+        if self._updating:
+            return
+        self.grid.new_seed = int(v)
+        notes = [n for n in self.grid.selected if split_lane(n.lane)[1] == "random"]
+        for n in notes:
+            n.seed = int(v)
+        if notes:
+            self.ctl.commit("pattern", "seed")
+            self.grid.update()
 
     def _on_bars(self, v):
         p = self.ctl.current_pattern
@@ -818,6 +915,7 @@ class PatternTab(QWidget):
             self._updating = True
             self.spin_vel.setValue(self.grid.selected[0].velocity)
             self._updating = False
+        self._load_note_props()
 
     # ---- horizontal scroll ------------------------------------------------------------------
     def _sync_hscroll(self):

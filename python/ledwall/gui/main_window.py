@@ -608,9 +608,20 @@ class MainWindow(QMainWindow):
                     if c.pattern_id == pat.id and c.start <= b < c.start + c.length:
                         step = ((b - c.start) * STEPS_PER_BEAT) % pat.steps
                         break
-        if step != self.pattern_tab.grid.playhead_step:
-            self.pattern_tab.grid.playhead_step = step
-            self.pattern_tab.grid.update()
+        grid = self.pattern_tab.grid
+        # waveform behind the pattern: the audio of the repetition of its clip being played (or the
+        # first one); none for a pattern that is not on the master track
+        wave = None
+        if pat and self.ctl.analysis is not None and grid.isVisible():
+            clip = None if eng.audition_pattern else (
+                next((c for c in self.ctl.song.clips if c.pattern_id == pat.id and c.start <= b < c.start + c.length),
+                     None) or self._pattern_section())
+            if clip is not None:
+                rep = math.floor((b - clip.start) / pat.beats) if clip.start <= b < clip.start + clip.length else 0
+                wave = clip.start + rep * pat.beats
+        if step != grid.playhead_step or wave != grid.wave_start_beat:
+            grid.playhead_step, grid.wave_start_beat = step, wave
+            grid.update()
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)

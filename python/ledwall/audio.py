@@ -45,6 +45,7 @@ class AudioAnalysis:
     bands: np.ndarray          # (N_BANDS, N) low -> high frequency energy 0..1
     bpm: float
     beat_times: np.ndarray
+    kick: np.ndarray | None = None   # low-end (kick / bass) hits 0..1 at feat_times, for display
 
     @property
     def detected_offset(self) -> float:
@@ -209,9 +210,11 @@ def analyse_audio(path: str, progress=lambda p, m: None) -> AudioAnalysis:
     bands = mel_db[:, :n].reshape(N_BANDS, 60 // N_BANDS, n).mean(axis=1)
     bands = np.stack([_attack_release(_norm(b), fps, 0.01, 0.12) for b in bands])
     feat_times = librosa.frames_to_time(np.arange(n), sr=sr, hop_length=HOP)
+    kick = librosa.onset.onset_strength(S=mel_db[:3], sr=sr, hop_length=HOP)[:n]     # below ~130 Hz
+    kick = _attack_release(np.clip(kick / max(1e-6, float(np.percentile(kick, 99.5))), 0, 1), fps, 0.002, 0.06)
     progress(100, "Done")
     return AudioAnalysis(path, duration, peaks_min, peaks_max, feat_times, env.astype(np.float32),
-                         bands.astype(np.float32), bpm, beat_times)
+                         bands.astype(np.float32), bpm, beat_times, kick.astype(np.float32))
 
 
 class AudioAnalysisWorker(QThread):

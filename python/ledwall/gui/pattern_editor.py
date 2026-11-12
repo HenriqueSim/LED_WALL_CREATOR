@@ -9,7 +9,8 @@ import copy
 import math
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+import numpy as np
+from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QScrollBar, QSpinBox, QVBoxLayout, QWidget,
@@ -43,6 +44,8 @@ class PatternGrid(QWidget):
         self.playhead_step: float | None = None
         self.highlight_bar: int | None = None     # bar opened from the master track
         self.collapsed: set = set()               # folded element ids (and "global")
+        self.wave_start_beat: float | None = None  # song beat under step 0 (where the pattern plays), for the waveform
+        self.show_wave = True
         self._drag = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -119,6 +122,60 @@ class PatternGrid(QWidget):
         return QRectF(self.x_of(n.start) + 1, self.RULER_H + lane_idx * self.ROW_H + 2,
                       max(3.0, n.length * self.px - 2), self.ROW_H - 4)
 
+    def _paint_wave(self, p: QPainter, steps: int, grid_bottom: float):
+        """The audio under this pattern (where it sits on the master track), faint behind the lanes:
+        the waveform in the middle and the low end (kick / bass) rising from the bottom, so hits can
+        be placed on what the band plays. Drawn over the visible part of the grid only."""
+        a, b0 = self.ctl.analysis, self.wave_start_beat
+        if a is None or b0 is None or not len(a.peaks_max):
+            return
+        vis = self.visibleRegion().boundingRect()
+        top, bottom = max(self.RULER_H, vis.top()), min(grid_bottom, vis.bottom() + 1)
+        x0, x1 = max(self.HEADER_W, self.x_of(0)), min(self.width(), self.x_of(steps))
+        if bottom - top < 20 or x1 - x0 < 4:
+            return
+        eng = self.ctl.engine
+        xs = np.arange(x0, x1 + 2, 2.0)                                     # column edges, 2 px wide
+        ts = np.array([eng.b2t(b0 + self.step_at(x) / STEPS_PER_BEAT) for x in (xs[0], xs[-1])])
+        ts = np.interp(xs, (xs[0], xs[-1]), ts)                             # tempo is constant: linear
+        nb = len(a.peaks_max)
+        idx = np.clip((ts / max(a.duration, 1e-6) * nb).astype(int), 0, nb - 1)
+        i0 = idx[:-1]
+        ok = (ts[:-1] >= 0) & (ts[:-1] < a.duration)
+        if not ok.any():
+            return
+        # each column: the peaks from its start to the next column's start
+        hi = np.maximum.reduceat(a.peaks_max, i0)
+        lo = np.minimum.reduceat(a.peaks_min, i0)
+        scale = 1.0 / max(1e-6, float(np.max(np.maximum(a.peaks_max, -a.peaks_min))))
+        mid, half = (top + bottom) / 2, (bottom - top) * 0.36
+        xc = xs[:-1] + 1.0
+        p.save()
+        # waveform
+        path = QPainterPath()
+        top_pts = [(x, mid - min(1.0, h * scale) * half) for x, h, o in zip(xc, hi, ok) if o]
+        bot_pts = [(x, mid - max(-1.0, l * scale) * half) for x, l, o in zip(xc, lo, ok) if o]
+        if top_pts:
+            path.moveTo(*top_pts[0])
+            for pt in top_pts[1:]:
+                path.lineTo(*pt)
+            for pt in reversed(bot_pts):
+                path.lineTo(*pt)
+            path.closeSubpath()
+            p.fillPath(path, QColor(150, 190, 255, 34))
+        # low end hits (kick / bass) from the bottom
+        lowc = a.kick if a.kick is not None else (a.bands[0] if a.bands.size else None)
+        if lowc is not None:
+            low = np.interp(xc, xs, np.interp(ts, a.feat_times, lowc))
+            kick = QPainterPath()
+            kick.moveTo(xc[0], bottom)
+            for x, v, o in zip(xc, low, ok):
+                kick.lineTo(x, bottom - (v if o else 0.0) * (bottom - top) * 0.55)
+            kick.lineTo(xc[-1], bottom)
+            kick.closeSubpath()
+            p.fillPath(kick, QColor(255, 150, 60, 58))
+        p.restore()
+
     def note_at(self, pos: QPointF):
         p = self.pattern
         if not p:
@@ -147,6 +204,9 @@ class PatternGrid(QWidget):
             r, g, b = LANE_COLORS[kind]
             base = 22 if i % 2 else 17
             p.fillRect(QRectF(self.HEADER_W, y, w, self.ROW_H), QColor(base + r // 40, base + g // 40, base + b // 40))
+        grid_bottom = self.RULER_H + len(lanes) * self.ROW_H
+        if self.show_wave:
+            self._paint_wave(p, steps, grid_bottom)
         # beyond pattern end
         x_end = self.x_of(steps)
         if x_end < w:
@@ -155,7 +215,6 @@ class PatternGrid(QWidget):
         # grid lines
         first = max(0, int(self.step_at(self.HEADER_W)))
         last = min(steps, int(self.step_at(w)) + 1)
-        grid_bottom = self.RULER_H + len(lanes) * self.ROW_H
         p.setFont(QFont("Sans", 8))
         for s in range(first, last + 1):
             x = self.x_of(s)
@@ -581,6 +640,12 @@ class PatternTab(QWidget):
                                  "one under the playhead). A pattern not on the master track loops on its own.")
         self.chk_loop.toggled.connect(self.loopSectionChanged.emit)
         ll.addWidget(self.chk_loop)
+        self.chk_wave = QCheckBox("Show the song's waveform behind the lanes")
+        self.chk_wave.setChecked(True)
+        self.chk_wave.setToolTip("The audio where this pattern sits on the master track: the waveform in blue and the "
+                                 "low end (kick / bass) in orange from the bottom, to place hits on the band's beats.")
+        self.chk_wave.toggled.connect(self._toggle_wave)
+        ll.addWidget(self.chk_wave)
         frow = QHBoxLayout()
         for text, c in (("Fold all", True), ("Unfold all", False)):
             b = QPushButton(text)
@@ -603,6 +668,8 @@ class PatternTab(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(self.grid)
         scroll.setWidgetResizable(True)
+        # the waveform is drawn over the visible rows: repaint all of it when scrolling
+        scroll.verticalScrollBar().valueChanged.connect(lambda *_: self.grid.update())
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.hbar = QScrollBar(Qt.Orientation.Horizontal)
         self.hbar.valueChanged.connect(self._on_hscroll)
@@ -768,6 +835,10 @@ class PatternTab(QWidget):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._sync_hscroll()
+
+    def _toggle_wave(self, on: bool):
+        self.grid.show_wave = on
+        self.grid.update()
 
     def _on_changed(self, kind):
         if kind in ("all", "patterns", "band"):

@@ -3,8 +3,8 @@
 Pipeline per frame:
   1. find master-track clips under the playhead (or the auditioned pattern)
   2. evaluate every note of their patterns -> per-lane envelope level / gate / onset peak
-  3. per element: resolve its lanes onto members (All, members, groups, Pulse, Chase, Random,
-     Strobe) and work out how much it is in the scene; then the global lanes (flash, blackout ...)
+  3. per element: resolve its lanes onto members (All, members, Pulse, Chase, Random, Strobe)
+     and onto its parts (the element's own groups) and work out how much it is in the scene; then the global lanes (flash, blackout ...)
   4. modulate with audio energy, add lyrics, optionally blend the end of a loop into its start
 """
 
@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .audio import AudioAnalysis
-from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, el_lane, split_lane
+from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, el_lane, part_owners, split_lane
 
 
 @dataclass
@@ -37,7 +37,7 @@ class FrameState:
     logo_peak: float = 0.0
     lyric: str = ""
     lyric_alpha: float = 0.0
-    elements: dict = field(default_factory=dict)   # element id -> (levels, flash, presence)
+    elements: dict = field(default_factory=dict)   # element id -> (member levels, flash, presence, part levels)
 
 
 _SCALARS = ("env", "beat_pulse", "bloom", "sparkle", "blackout", "logo_level", "logo_peak", "lyric_alpha")
@@ -51,9 +51,13 @@ def blend_states(a: FrameState, b: FrameState, w: float) -> FrameState:
         setattr(out, f, (1 - w) * getattr(a, f) + w * getattr(b, f))
     out.elements = {}
     for k in set(a.elements) | set(b.elements):
-        la, fa, pa = a.elements.get(k, (0.0, 0.0, 0.0))
-        lb, fb, pb = b.elements.get(k, (0.0, 0.0, 0.0))
-        out.elements[k] = ((1 - w) * la + w * lb, (1 - w) * fa + w * fb, (1 - w) * pa + w * pb)
+        la, fa, pa, qa = a.elements.get(k, (0.0, 0.0, 0.0, None))
+        lb, fb, pb, qb = b.elements.get(k, (0.0, 0.0, 0.0, None))
+        if qa is None or qb is None or np.shape(qa) != np.shape(qb):
+            q = qb if w > 0.5 else qa
+        else:
+            q = (1 - w) * qa + w * qb
+        out.elements[k] = ((1 - w) * la + w * lb, (1 - w) * fa + w * fb, (1 - w) * pa + w * pb, q)
     if w > 0.5:
         out.lyric, out.step = b.lyric, b.step
     return out
@@ -271,22 +275,24 @@ class MotionEngine:
                 return lane(el_lane(_e, sub), idx)
             levels = np.zeros(n_mem, np.float32)
             flash = np.zeros(n_mem, np.float32)
+            n_parts = el.part_count()
+            plv = np.zeros(n_parts, np.float32)      # the element's groups light parts directly
             if self.preview_pulse:
                 pulse, chase, rnd, strobe = 1.0, 0.0, 0.0, 0.0
                 presence = 1.0
             else:
                 for m in song.members:
                     levels[midx[m.id]] = L(f"m:{m.id}")
-                for g in song.groups:
-                    gv = L(f"g:{g.id}")
-                    if gv > 0:
-                        for mid in g.members:
-                            if mid in midx:
-                                levels[midx[mid]] = max(levels[midx[mid]], gv)
+                for g in el.groups:
+                    gv = L(f"g:{g['id']}")
+                    idx = [i for i in g.get("parts", []) if 0 <= i < n_parts]
+                    if gv > 0 and idx:
+                        plv[idx] = np.maximum(plv[idx], gv)
                 if n_mem:
                     levels = np.maximum(levels, L("all"))
                 pulse, chase, rnd, strobe = L("pulse", 1), L("chase", 1), L("random", 1), L("strobe", 1)
-                presence = max(float(levels.max()) if n_mem else 0.0, pulse, chase, rnd, strobe)
+                presence = max(float(levels.max()) if n_mem else 0.0, float(plv.max()) if n_parts else 0.0,
+                               pulse, chase, rnd, strobe)
             if pulse > 0 and n_mem:
                 bp, _ = fx_clock(el_lane(el.id, "pulse"))
                 levels = np.maximum(levels, pulse * (0.2 + 0.8 * bp))
@@ -305,6 +311,9 @@ class MotionEngine:
             # audio reactivity on whatever is lit
             if n_mem and lk.audio_react > 0:
                 levels = levels * ((1.0 - lk.audio_react) + lk.audio_react * (0.25 + 0.75 * bands)) * (1 + 0.25 * lk.audio_react)
+            if n_parts and lk.audio_react > 0 and plv.any():
+                pb = np.interp(np.linspace(0, len(bands_s) - 1, n_parts), np.arange(len(bands_s)), bands_s)
+                plv = plv * ((1.0 - lk.audio_react) + lk.audio_react * (0.25 + 0.75 * pb)) * (1 + 0.25 * lk.audio_react)
             if strobe > 0 and n_mem:
                 sv = lanes.get(el_lane(el.id, "strobe"))
                 on = ((b * max(1, lk.strobe_rate) * (sv[3] if sv else 1.0)) % 1.0) < 0.45
@@ -312,20 +321,26 @@ class MotionEngine:
                     levels = np.maximum(levels, strobe)
                     flash = np.maximum(flash, strobe)
                     bloom += 0.5 * strobe
-                elif max(float(levels.max()), pulse, chase, rnd) < 0.01:
+                elif max(float(levels.max()) if n_mem else 0.0, float(plv.max()) if n_parts else 0.0,
+                         pulse, chase, rnd) < 0.01:
                     presence = 0.0          # strobe alone: dark between flashes
             if fpk > 0.002 and n_mem and presence > 0.001:   # the flash hits what is in the scene
                 levels = np.maximum(levels, fpk)
                 flash = np.maximum(flash, 0.85 * fpk)
             levels = np.clip(levels, 0, 1.5).astype(np.float32)
             flash = np.clip(flash, 0, 1).astype(np.float32)
+            plv = np.clip(plv, 0, 1.5).astype(np.float32)
             if el.type == "haze":       # no parts: its amount is the lane level; it doesn't light members
                 amount = 1.0 if self.preview_pulse else L("all")
-                elements[el.id] = (levels, flash, min(1.0, amount))
+                elements[el.id] = (levels, flash, min(1.0, amount), None)
                 continue
-            elements[el.id] = (levels, flash, min(1.0, presence))
+            elements[el.id] = (levels, flash, min(1.0, presence), plv)
             if n_mem:
                 all_lv = np.maximum(all_lv, levels)
+                if plv.any():       # a lit part counts for the members it belongs to (haze, stage view)
+                    for i, owners in enumerate(part_owners(n_parts, n_mem)):
+                        for o in owners:
+                            all_lv[o] = max(all_lv[o], plv[i])
                 all_fl = np.maximum(all_fl, flash)
         levels, flash = all_lv, all_fl
 

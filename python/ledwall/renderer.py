@@ -123,11 +123,13 @@ class FrameRenderer:
     def _drive(self, el, st: FrameState, song: Song, n: int):
         """(levels, brightness, flash) for the n parts of an element. Brightness = idle glow while the
         element is in the scene + its lit level."""
-        lv, fl, presence = st.elements.get(el.id, (None, None, 0.0))
+        lv, fl, presence, plv = st.elements.get(el.id, (None, None, 0.0, None))
         if lv is None:
             lv = np.zeros(len(song.members), np.float32)
             fl = lv
         levels, flash = self.parts(lv, n), self.parts(fl, n)
+        if plv is not None and len(plv) == n:     # the element's groups, part by part
+            levels = np.maximum(levels, plv)
         b = el.idle * presence + (1.0 - el.idle) * np.minimum(levels, 1.2)
         return levels, b, flash
 
@@ -245,7 +247,7 @@ class FrameRenderer:
     def _haze(self, el, st: FrameState, song: Song):
         """The soft wash of light (glow space, 1/4 res): a base, more while the other elements are lit,
         breathing with the music. Its amount is the Haze lane level (note velocity)."""
-        _lv, _fl, amount = st.elements[el.id]
+        amount = st.elements[el.id][2]
         cx, cy = el.x * self.w, el.y * self.h
         rw, rh = max(0.01, el.size) * self.w, max(0.01, el.height) * self.h
         self.bboxes[el.id] = (cx - rw, cy - rh, cx + rw, min(self.h, cy + rh * 0.2))

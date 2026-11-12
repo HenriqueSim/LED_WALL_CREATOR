@@ -1,4 +1,4 @@
-"""Song data model: band (members + groups), patterns (piano-roll notes), master track
+"""Song data model: band members, elements (each with its own groups of parts), patterns (piano-roll notes), master track
 (clips + lyrics) and the per-song look. Pure Python - no Qt, no OpenCV."""
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ N_TRACKS = 3                # pattern tracks on the master track
 # Lanes. Every element of the song is a folder in the pattern editor holding its own lanes:
 #   e:<element id>|all        the whole element
 #   e:<element id>|m:<id>     one member's part of it
-#   e:<element id>|g:<id>     a group's parts
+#   e:<element id>|g:<id>     one of that element's groups (a chosen set of its parts)
 #   e:<element id>|<fx>       motion modes on that element (pulse, chase, random, strobe)
 # Global lanes (not tied to an element) are "fx:<key>".
 #   key        label           help text
@@ -101,11 +101,22 @@ class Member:
     name: str
 
 
-@dataclass
-class Group:
-    id: str
-    name: str
-    members: list = field(default_factory=list)   # member ids
+def new_group(name: str, parts=()) -> dict:
+    """A group of one element: a name and the indices of the element's parts (segments) it lights."""
+    return dict(id=new_id(), name=name, parts=sorted(set(int(i) for i in parts)))
+
+
+def part_owners(n: int, m: int) -> list:
+    """For each of an element's n parts, the indices of the members it belongs to (the same sharing
+    as the renderer: more parts than members -> each member gets a run of parts; fewer -> a part
+    covers several members)."""
+    n, m = max(1, int(n)), max(0, int(m))
+    if m == 0:
+        return [[] for _ in range(n)]
+    if n >= m:
+        return [[(i * m) // n] for i in range(n)]
+    starts = [-((-i * m) // n) for i in range(n + 1)]
+    return [list(range(starts[i], starts[i + 1])) for i in range(n)]
 
 
 @dataclass
@@ -192,6 +203,20 @@ class Element:
     cuts: int = 0                # sun: horizontal cut lines near the horizon
     music: float = 1.0           # haze: how much it breathes with the music's loudness
     haze: float = 0.0            # haze this element lights around itself (spread + intensity)
+    groups: list = field(default_factory=list)   # new_group() dicts: named sets of this element's parts
+
+    def part_count(self) -> int:
+        """How many parts (segments) the element has: polygon sides, custom shapes, the sun is one
+        piece, haze has none, everything else its Count setting."""
+        if self.type == "haze":
+            return 0
+        if self.type == "sun":
+            return 1
+        if self.type == "polygon":
+            return max(3, int(self.sides))
+        if self.type == "custom":
+            return max(1, len(self.shapes or []))
+        return max(1, int(self.count))
 
 
 def preset_element(kind: str) -> Element:
@@ -281,7 +306,6 @@ class Look:
 @dataclass
 class Song:
     members: list = field(default_factory=list)
-    groups: list = field(default_factory=list)
     patterns: list = field(default_factory=list)
     clips: list = field(default_factory=list)
     lyrics: list = field(default_factory=list)
@@ -306,7 +330,7 @@ class Song:
             return [(el_lane(el.id, "all"), "Haze amount", "all")]
         out = [(el_lane(el.id, "all"), "All", "all")]
         out += [(el_lane(el.id, f"m:{m.id}"), m.name, "member") for m in self.members]
-        out += [(el_lane(el.id, f"g:{g.id}"), g.name, "group") for g in self.groups]
+        out += [(el_lane(el.id, f"g:{g['id']}"), g["name"], "group") for g in el.groups]
         out += [(el_lane(el.id, k), label, "fx") for k, label, _ in ELEMENT_FX]
         return out
 
@@ -358,15 +382,14 @@ class Song:
 
     def remove_member(self, mid: str):
         self.members = [m for m in self.members if m.id != mid]
-        for g in self.groups:
-            g.members = [x for x in g.members if x != mid]
         for p in self.patterns:
             p.notes = [n for n in p.notes if split_lane(n.lane)[1] != f"m:{mid}"]
 
-    def remove_group(self, gid: str):
-        self.groups = [g for g in self.groups if g.id != gid]
+    def remove_group(self, el, gid: str):
+        el.groups = [g for g in el.groups if g["id"] != gid]
+        lane = el_lane(el.id, f"g:{gid}")
         for p in self.patterns:
-            p.notes = [n for n in p.notes if split_lane(n.lane)[1] != f"g:{gid}"]
+            p.notes = [n for n in p.notes if n.lane != lane]
 
     def remove_element(self, eid: str):
         self.elements = [e for e in self.elements if e.id != eid]
@@ -385,12 +408,12 @@ class Song:
     # ---- (de)serialisation ---------------------------------------------------
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["version"] = 6
+        d["version"] = 7
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "Song":
-        if d.get("version") not in (2, 3, 4, 5, 6):
+        if d.get("version") not in (2, 3, 4, 5, 6, 7):
             raise ValueError("This project was made with an older version of the app (no patterns).")
 
         def tup(v):
@@ -404,7 +427,7 @@ class Song:
         ek = {f.name for f in fields(Element)}
         n_mem = max(1, len(d.get("members", [])))
         if "elements" in d:
-            elements = [Element(**{k: (list(v) if k == "shapes" else tup(v)) for k, v in e.items() if k in ek})
+            elements = [Element(**{k: (list(v) if k in ("shapes", "groups") else tup(v)) for k, v in e.items() if k in ek})
                         for e in d["elements"]]
             for e, raw in zip(elements, d["elements"]):
                 if "count" not in raw:   # before per-element part counts
@@ -453,9 +476,23 @@ class Song:
                         p.elements.append(haze.id)
                     p.notes.append(Note(el_lane(haze.id, "all"), 0, p.bars * STEPS_PER_BAR, 1.0))
             look.ambient = 0.0
+        members = [Member(**m) for m in d.get("members", [])]
+        if d.get("version", 0) < 7:
+            # groups used to be sets of members shared by every element; they now belong to each
+            # element as sets of its parts. Each element gets a copy (same id, so the notes on
+            # e:<element>|g:<id> keep working) holding the parts those members owned.
+            midx = {m.id: i for i, m in enumerate(members)}
+            for el in elements:
+                n = el.part_count()
+                if not n:
+                    continue
+                owners = part_owners(n, len(members))
+                for g in d.get("groups", []):
+                    mine = {midx[x] for x in g.get("members", []) if x in midx}
+                    el.groups.append(dict(id=g["id"], name=g["name"],
+                                          parts=[i for i, o in enumerate(owners) if mine & set(o)]))
         return Song(
-            members=[Member(**m) for m in d.get("members", [])],
-            groups=[Group(**g) for g in d.get("groups", [])],
+            members=members,
             patterns=patterns,
             clips=[Clip(**c) for c in d.get("clips", [])],
             lyrics=[LyricClip(**l) for l in d.get("lyrics", [])],
@@ -470,19 +507,19 @@ class Song:
 
 
 def default_song() -> Song:
-    """Six members, two groups, a sunset sun and a horizontal beam, and a few starter patterns."""
+    """Six members, a sunset sun, a horizontal beam (with left / right groups) and a few starter patterns."""
     members = [Member(new_id(), f"Member {i + 1}") for i in range(6)]
-    ids = [m.id for m in members]
-    groups = [Group(new_id(), "Left side", ids[:3]), Group(new_id(), "Right side", ids[3:])]
     sun, beam = preset_element("sun"), preset_element("beam")
     beam.count = 6
+    groups = [new_group("Left side", range(0, 3)), new_group("Right side", range(3, 6))]
+    beam.groups = groups
     S, B = (lambda sub: el_lane(sun.id, sub)), (lambda sub: el_lane(beam.id, sub))
 
     intro = Pattern(new_id(), "Intro sunrise", 2, PATTERN_COLORS[0],
                     [Note(S("all"), 0, 32, 0.55), Note(S("pulse"), 16, 16, 0.6)])
     groove = Pattern(new_id(), "Groove", 1, PATTERN_COLORS[1],
                      [Note(S("all"), 0, 16, 0.7), Note(B("pulse"), 0, 16, 0.7)] +
-                     [Note(B(f"g:{groups[i % 2].id}"), i * 4, 2, 0.9) for i in range(4)])
+                     [Note(B(f"g:{groups[i % 2]['id']}"), i * 4, 2, 0.9) for i in range(4)])
     chorus = Pattern(new_id(), "Chorus", 2, PATTERN_COLORS[2],
                      [Note(S("all"), 0, 32, 1.0), Note(S("pulse"), 0, 32, 0.8), Note(B("all"), 0, 32, 0.8),
                       Note("fx:logo", 0, 32, 1.0), Note("fx:logo_glow", 0, 1, 1.0),
@@ -505,4 +542,4 @@ def default_song() -> Song:
     ]
     lyrics = [LyricClip(new_id(), "lyrics go here in the chorus", 48.0, 16.0)]
     look = Look(logo_color="cutout")
-    return Song(members, groups, [intro, groove, chorus, build], clips, lyrics, [beam, sun, haze], look)
+    return Song(members, [intro, groove, chorus, build], clips, lyrics, [beam, sun, haze], look)

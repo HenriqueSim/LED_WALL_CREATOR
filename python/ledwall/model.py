@@ -1,4 +1,4 @@
-"""Song data model: band members, elements (each with its own groups of parts), patterns (piano-roll notes), master track
+"""Song data model: elements (each with its own members = its segments, and groups of them), patterns (piano-roll notes), master track
 (clips + lyrics) and the per-song look. Pure Python - no Qt, no OpenCV."""
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ N_TRACKS = 3                # pattern tracks on the master track
 
 # Lanes. Every element of the song is a folder in the pattern editor holding its own lanes:
 #   e:<element id>|all        the whole element
-#   e:<element id>|m:<id>     one member's part of it
+#   e:<element id>|p:<index>  one of its members (= one segment / part, left to right)
 #   e:<element id>|g:<id>     one of that element's groups (a chosen set of its parts)
 #   e:<element id>|<fx>       motion modes on that element (pulse, chase, random, strobe)
 # Global lanes (not tied to an element) are "fx:<key>".
@@ -204,6 +204,16 @@ class Element:
     music: float = 1.0           # haze: how much it breathes with the music's loudness
     haze: float = 0.0            # haze this element lights around itself (spread + intensity)
     groups: list = field(default_factory=list)   # new_group() dicts: named sets of this element's parts
+    part_names: list = field(default_factory=list)   # names of its members (one per part); blank = "Member n"
+
+    def member_name(self, i: int) -> str:
+        n = self.part_names[i] if i < len(self.part_names) else ""
+        return n or f"Member {i + 1}"
+
+    def can_resize(self) -> bool:
+        """Members (parts) can be added / removed here: not for the sun (one piece), haze (none) or a
+        custom element (one per shape: add shapes in the Elements tab)."""
+        return self.type not in ("sun", "haze", "custom")
 
     def part_count(self) -> int:
         """How many parts (segments) the element has: polygon sides, custom shapes, the sun is one
@@ -305,7 +315,7 @@ class Look:
 
 @dataclass
 class Song:
-    members: list = field(default_factory=list)
+    members: list = field(default_factory=list)     # the people on stage (stage view figures)
     patterns: list = field(default_factory=list)
     clips: list = field(default_factory=list)
     lyrics: list = field(default_factory=list)
@@ -316,6 +326,7 @@ class Song:
     audio_path: str | None = None
     region: tuple | None = None             # loop / export region in seconds
     loop: bool = False
+    muted_tracks: list = field(default_factory=list)   # master-track tracks switched off (not played)
 
     # ---- lookups -----------------------------------------------------------
     def pattern_elements(self, pat) -> list:
@@ -329,7 +340,7 @@ class Song:
         if el.type == "haze":       # no parts: one lane, note velocity = how much haze
             return [(el_lane(el.id, "all"), "Haze amount", "all")]
         out = [(el_lane(el.id, "all"), "All", "all")]
-        out += [(el_lane(el.id, f"m:{m.id}"), m.name, "member") for m in self.members]
+        out += [(el_lane(el.id, f"p:{i}"), el.member_name(i), "member") for i in range(el.part_count())]
         out += [(el_lane(el.id, f"g:{g['id']}"), g["name"], "group") for g in el.groups]
         out += [(el_lane(el.id, k), label, "fx") for k, label, _ in ELEMENT_FX]
         return out
@@ -380,10 +391,42 @@ class Song:
         ends = [c.start + c.length for c in self.clips] + [l.start + l.length for l in self.lyrics]
         return max(ends) if ends else 0.0
 
-    def remove_member(self, mid: str):
-        self.members = [m for m in self.members if m.id != mid]
+    def add_part(self, el) -> bool:
+        """One more member (segment) at the end of an element."""
+        if not el.can_resize():
+            return False
+        if el.type == "polygon":
+            el.sides = el.part_count() + 1
+        else:
+            el.count = el.part_count() + 1
+        return True
+
+    def remove_part(self, el, i: int) -> bool:
+        """Remove member (segment) i of an element: its notes go, later members move down one."""
+        n = el.part_count()
+        if not el.can_resize() or n <= (3 if el.type == "polygon" else 1) or not 0 <= i < n:
+            return False
+        if el.type == "polygon":
+            el.sides = n - 1
+        else:
+            el.count = n - 1
+        if i < len(el.part_names):
+            el.part_names.pop(i)
+        for g in el.groups:
+            g["parts"] = [j - (j > i) for j in g["parts"] if j != i]
+        pre = f"e:{el.id}|p:"
         for p in self.patterns:
-            p.notes = [n for n in p.notes if split_lane(n.lane)[1] != f"m:{mid}"]
+            keep = []
+            for nt in p.notes:
+                if nt.lane.startswith(pre):
+                    j = int(nt.lane[len(pre):])
+                    if j == i:
+                        continue
+                    if j > i:
+                        nt.lane = f"{pre}{j - 1}"
+                keep.append(nt)
+            p.notes = keep
+        return True
 
     def remove_group(self, el, gid: str):
         el.groups = [g for g in el.groups if g["id"] != gid]
@@ -408,12 +451,12 @@ class Song:
     # ---- (de)serialisation ---------------------------------------------------
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["version"] = 7
+        d["version"] = 8
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "Song":
-        if d.get("version") not in (2, 3, 4, 5, 6, 7):
+        if d.get("version") not in (2, 3, 4, 5, 6, 7, 8):
             raise ValueError("This project was made with an older version of the app (no patterns).")
 
         def tup(v):
@@ -427,7 +470,7 @@ class Song:
         ek = {f.name for f in fields(Element)}
         n_mem = max(1, len(d.get("members", [])))
         if "elements" in d:
-            elements = [Element(**{k: (list(v) if k in ("shapes", "groups") else tup(v)) for k, v in e.items() if k in ek})
+            elements = [Element(**{k: (list(v) if k in ("shapes", "groups", "part_names") else tup(v)) for k, v in e.items() if k in ek})
                         for e in d["elements"]]
             for e, raw in zip(elements, d["elements"]):
                 if "count" not in raw:   # before per-element part counts
@@ -491,6 +534,29 @@ class Song:
                     mine = {midx[x] for x in g.get("members", []) if x in midx}
                     el.groups.append(dict(id=g["id"], name=g["name"],
                                           parts=[i for i, o in enumerate(owners) if mine & set(o)]))
+        if d.get("version", 0) < 8:
+            # member lanes used to be the band's members, shared out over each element's parts; an
+            # element now has one member per part. A note on a band member moves to the parts that
+            # member owned; when parts and members match 1:1 the parts keep the members' names.
+            midx = {m.id: i for i, m in enumerate(members)}
+            for el in elements:
+                n = el.part_count()
+                if not n:
+                    continue
+                owners = part_owners(n, len(members))
+                if n == len(members):
+                    el.part_names = [m.name for m in members]
+                for p in patterns:
+                    new = []
+                    for nt in p.notes:
+                        eid, sub = split_lane(nt.lane)
+                        if eid == el.id and sub.startswith("m:"):
+                            mi = midx.get(sub[2:])
+                            new += [Note(el_lane(eid, f"p:{i}"), nt.start, nt.length, nt.velocity)
+                                    for i, o in enumerate(owners) if mi in o]
+                        else:
+                            new.append(nt)
+                    p.notes = new
         return Song(
             members=members,
             patterns=patterns,
@@ -503,6 +569,7 @@ class Song:
             audio_path=d.get("audio_path"),
             region=tup(d.get("region")),
             loop=bool(d.get("loop", False)),
+            muted_tracks=[int(x) for x in d.get("muted_tracks", [])],
         )
 
 

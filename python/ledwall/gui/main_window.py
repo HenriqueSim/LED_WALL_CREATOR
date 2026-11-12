@@ -137,7 +137,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.band_tab, "Band (members && groups)")
         self.tabs.addTab(self.look_tab, "Look && Song")
         self.tabs.addTab(self.export_tab, "Export")
-        self.tabs.currentChanged.connect(lambda *_: self._update_audition())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.band_tab.highlightChanged.connect(self._update_audition)
+        self.band_tab.elementChosen.connect(self.elements_tab.select)
         self.elements_tab.previewModeChanged.connect(lambda *_: self._update_audition())
         self.canvas.pressed.connect(self._canvas_press)
         self.canvas.dragged.connect(self._canvas_drag)
@@ -263,9 +265,15 @@ class MainWindow(QMainWindow):
                 target = clip.start + pb
         self.seek(eng.b2t(target))
 
+    def _on_tab_changed(self, *_):
+        if self.tabs.currentWidget() is self.band_tab:      # show the element picked in the Elements tab
+            self.band_tab.select_element(self.elements_tab.selected_id)
+        self._update_audition()
+
     def _update_audition(self):
         eng = self.ctl.engine
         cur = self.tabs.currentWidget()
+        eng.preview_highlight = self.band_tab.highlight() if cur is self.band_tab else None
         in_elements = cur is self.elements_tab
         eng.preview_pulse = in_elements and self.elements_tab.chk_pulse.isChecked()
         self.canvas.interactive = in_elements
@@ -279,7 +287,9 @@ class MainWindow(QMainWindow):
                 self.section = (eng.b2t(clip.start), eng.b2t(clip.start + clip.length))
             else:
                 eng.audition_pattern = pat.id
-        if eng.preview_pulse:
+        if eng.preview_highlight is not None:
+            self.lbl_mode.setText("Band: the selected member / group lit")
+        elif eng.preview_pulse:
             self.lbl_mode.setText("Elements: pulse preview")
         elif self.section:
             bar0 = int(eng.t2b(self.section[0]) // 4) + 1

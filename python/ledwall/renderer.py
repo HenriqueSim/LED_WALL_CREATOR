@@ -123,13 +123,12 @@ class FrameRenderer:
     def _drive(self, el, st: FrameState, song: Song, n: int):
         """(levels, brightness, flash) for the n parts of an element. Brightness = idle glow while the
         element is in the scene + its lit level."""
-        lv, fl, presence, plv = st.elements.get(el.id, (None, None, 0.0, None))
+        lv, fl, presence = st.elements.get(el.id, (None, None, 0.0))
         if lv is None:
-            lv = np.zeros(len(song.members), np.float32)
-            fl = lv
-        levels, flash = self.parts(lv, n), self.parts(fl, n)
-        if plv is not None and len(plv) == n:     # the element's groups, part by part
-            levels = np.maximum(levels, plv)
+            lv = fl = np.zeros(n, np.float32)
+        # one level per member = part; resample if the element's part count differs (old state)
+        levels = lv if len(lv) == n else self.parts(lv, n)
+        flash = fl if len(fl) == n else self.parts(fl, n)
         b = el.idle * presence + (1.0 - el.idle) * np.minimum(levels, 1.2)
         return levels, b, flash
 
@@ -538,8 +537,8 @@ class FrameRenderer:
 
     def _draw_bars(self, layer, el, st, song):
         lk = song.look
-        n_mem = len(song.members)
         n = max(1, int(el.count))
+        n_mem = n          # every bar is its own member: evenly spaced
         levels, b, flash = self._drive(el, st, song, n)
         rgb = self.element_rgb(el, lk)
         top_max, bottom = self._bar_limits(el, lk)

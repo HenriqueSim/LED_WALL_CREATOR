@@ -90,8 +90,8 @@ PARTS_HINT = {
     "sun": "One part: lit by the brightest of its lanes.",
     "haze": "No parts: put notes on its Haze amount lane in a pattern to bring it in (velocity = how much "
             "haze). It brightens while the other elements are lit and breathes with the music.",
-    "polygon": "Each side is a part.",
-    "custom": "Each shape is a part, shared out between the members in list order.",
+    "polygon": "Each side is a member: one row in the pattern editor (name and group them in the Band tab).",
+    "custom": "Each shape is a member: one row in the pattern editor (name and group them in the Band tab).",
 }
 
 
@@ -471,11 +471,10 @@ class ElementsTab(QWidget):
             for attr, sl in self.sliders.items():
                 sl.set_value(getattr(el, attr))
                 sl.set_default(getattr(defaults, attr))
-            n = {"sun": 1, "polygon": el.sides}.get(el.type, el.count)
-            m = len(self.ctl.song.members)
+            n = el.part_count()
             share = PARTS_HINT.get(el.type) or (
-                f"{n} part{'s' if n != 1 else ''} shared between {m} members"
-                + (" — each part lights when any of its members does." if n < m else "."))
+                f"{n} segment{'s' if n != 1 else ''} = {n} member{'s' if n != 1 else ''}: one row each in the "
+                "pattern editor (name and group them in the Band tab).")
             self.lbl_parts.setText(share)
         self._updating = False
         self._load_shapes(el if has and el.type == "custom" else None)

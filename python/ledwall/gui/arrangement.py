@@ -232,6 +232,7 @@ class ArrangementView(QWidget):
             r = self.clip_rect(c)
             if r.right() < self.HEADER_W or r.left() > w:
                 continue
+            p.setOpacity(0.28 if c.track in song.muted_tracks else 1.0)
             cr, cg, cb = pat.color
             p.fillRect(r, QColor(cr // 3, cg // 3, cb // 3))
             p.fillRect(QRectF(r.left(), r.top(), r.width(), 13), QColor(cr, cg, cb, 200))
@@ -262,6 +263,7 @@ class ArrangementView(QWidget):
             p.drawText(QRectF(r.left() + 3, r.top(), r.width() - 4, 13), Qt.AlignmentFlag.AlignVCenter, pat.name)
             p.setPen(QPen(QColor(255, 255, 255), 2) if c in self.selected else QPen(QColor(cr, cg, cb), 1))
             p.drawRect(r)
+        p.setOpacity(1.0)
 
         # lyrics
         p.setFont(QFont("Sans", 9))
@@ -290,7 +292,17 @@ class ArrangementView(QWidget):
         p.setFont(QFont("Sans", 9))
         p.drawText(QRectF(6, self.RULER_H, self.HEADER_W, self.WAVE_H), Qt.AlignmentFlag.AlignVCenter, "Audio")
         for i in range(N_TRACKS):
+            muted = i in song.muted_tracks
+            p.setPen(QColor(110, 110, 110) if muted else QColor(200, 200, 200))
             p.drawText(QRectF(6, self.track_y(i), self.HEADER_W, self.TRACK_H), Qt.AlignmentFlag.AlignVCenter, f"Track {i + 1}")
+            br = self.mute_rect(i)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(60, 60, 64) if muted else QColor(60, 190, 120))
+            p.drawRoundedRect(br, br.height() / 2, br.height() / 2)
+            p.setPen(QColor(170, 170, 170) if muted else QColor(10, 30, 18))
+            p.drawText(br, Qt.AlignmentFlag.AlignCenter, "OFF" if muted else "ON")
+            p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QColor(200, 200, 200))
         p.drawText(QRectF(6, self.lyric_y, self.HEADER_W, self.LYRIC_H), Qt.AlignmentFlag.AlignVCenter, "Lyrics")
         p.setPen(QPen(QColor(60, 60, 60), 1))
         p.drawLine(QPointF(self.HEADER_W, 0), QPointF(self.HEADER_W, h))
@@ -379,10 +391,27 @@ class ArrangementView(QWidget):
         self.update()
 
     # ---- mouse --------------------------------------------------------------------------------------
+    def mute_rect(self, i: int) -> QRectF:
+        return QRectF(self.HEADER_W - 40, self.track_y(i) + self.TRACK_H / 2 - 9, 34, 18)
+
+    def toggle_mute(self, i: int):
+        """Switch a track off / on: an off track's clips are not played (to compare patterns)."""
+        m = self.ctl.song.muted_tracks
+        if i in m:
+            m.remove(i)
+        else:
+            m.append(i)
+            m.sort()
+        self.ctl.commit("arrangement")
+        self.update()
+
     def mousePressEvent(self, ev):
         self.setFocus()
         pos = ev.position()
         if pos.x() < self.HEADER_W:
+            for i in range(N_TRACKS):
+                if self.mute_rect(i).adjusted(-4, -6, 4, 6).contains(pos):
+                    self.toggle_mute(i)
             return
         row = self.row_at(pos.y())
         shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -767,7 +796,7 @@ class MasterTab(QWidget):
         ll.addWidget(hint("Double-click a track: place pattern · drag clip: move (Ctrl copies) · drag right edge: "
                           "stretch (pattern loops) · double-click clip: edit its pattern · right-click: menu · "
                           "Ctrl+C / V (at playhead) / D · Shift-drag ruler: loop region · Shift-drag tracks: select · "
-                          "double-click Lyrics lane: add text"))
+                          "double-click Lyrics lane: add text · ON / OFF next to a track: switch it off to compare patterns"))
 
         self.view = ArrangementView(ctl)
         self.view.seekRequested.connect(seek)

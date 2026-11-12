@@ -310,10 +310,11 @@ class MotionEngine:
             if chase > 0 and n:
                 key = el_lane(el.id, "chase")
                 _, cs = fx_clock(key)
-                d = lanes[key][4].direction if key in lanes else "right"
-                for j in chase_parts(cs - 1, n, d):     # a fading trail one step behind
+                nt = lanes[key][4] if key in lanes else None
+                d, st0 = (nt.direction, nt.start_part) if nt else ("right", -1)
+                for j in chase_parts(cs - 1, n, d, st0):     # a fading trail one step behind
                     levels[j] = max(levels[j], chase * 0.35)
-                for i in chase_parts(cs, n, d):
+                for i in chase_parts(cs, n, d, st0):
                     levels[i] = max(levels[i], chase)
             if rnd > 0:
                 key = el_lane(el.id, "random")

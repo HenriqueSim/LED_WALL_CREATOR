@@ -23,6 +23,7 @@ from .common import LANE_COLORS, ColorButton, hint, roomy
 
 _CLIPBOARD: list = []   # [(Note copy, rel_start, rel_row)]: rows counted from the copy's top row
 _DIR_ARROW = {"right": "→", "left": "←", "bounce": "↔", "out": "⇤⇥", "in": "⇥⇤"}
+_DEFAULT_START = {"right": "left end", "bounce": "left end", "left": "right end", "out": "centre", "in": "outside"}
 
 
 class PatternGrid(QWidget):
@@ -282,7 +283,11 @@ class PatternGrid(QWidget):
                     p.setPen(QPen(QColor(0, 0, 0, 120), 1))
                     p.drawRect(rect)
                 sub = split_lane(n.lane)[1]
-                tag = _DIR_ARROW.get(n.direction, "→") if sub == "chase" else (f"#{n.seed}" if sub == "random" else "")
+                tag = ""
+                if sub == "chase":
+                    tag = _DIR_ARROW.get(n.direction, "→") + (f" {n.start_part + 1}" if n.start_part >= 0 else "")
+                elif sub == "random":
+                    tag = f"#{n.seed}"
                 if tag and rect.width() > 16:
                     p.setPen(QColor(0, 0, 0, 200))
                     p.setFont(QFont("Sans", 8, QFont.Weight.Bold))
@@ -697,6 +702,11 @@ class PatternTab(QWidget):
                                   "Chase notes).")
         self.combo_dir.currentIndexChanged.connect(self._on_direction)
         form.addRow("Chase direction", self.combo_dir)
+        self.combo_start = QComboBox()
+        self.combo_start.setToolTip("The member the selected Chase notes start on. Default: the left end (→, ↔), "
+                                    "the right end (←), the centre (centre out) or the outside (outside in).")
+        self.combo_start.currentIndexChanged.connect(self._on_start)
+        form.addRow("Chase starts on", self.combo_start)
         self.spin_seed = QSpinBox()
         self.spin_seed.setRange(1, 999)
         self.spin_seed.setToolTip("Which random flicker the selected Random notes play. Give two similar elements "
@@ -704,6 +714,7 @@ class PatternTab(QWidget):
                                   "flicker. Also used for new Random notes.")
         self.spin_seed.valueChanged.connect(self._on_seed)
         form.addRow("Random seed", self.spin_seed)
+        self.form_props = form
         ll.addLayout(form)
         self.lbl_elements = QLabel()
         self.lbl_elements.setObjectName("hint")
@@ -890,8 +901,21 @@ class PatternTab(QWidget):
         subs = [split_lane(n.lane)[1] for n in self.grid.selected]
         chase = [n for n, s in zip(self.grid.selected, subs) if s == "chase"]
         rnd = [n for n, s in zip(self.grid.selected, subs) if s == "random"]
-        self.combo_dir.setCurrentIndex(max(0, self.combo_dir.findData(chase[0].direction if chase else self.grid.new_direction)))
-        self.spin_seed.setValue(rnd[0].seed if rnd else self.grid.new_seed)
+        # chase settings only for Chase notes, the seed only for Random notes
+        for w in (self.combo_dir, self.combo_start):
+            self.form_props.setRowVisible(w, bool(chase))
+        self.form_props.setRowVisible(self.spin_seed, bool(rnd))
+        if chase:
+            d = chase[0].direction
+            self.combo_dir.setCurrentIndex(max(0, self.combo_dir.findData(d)))
+            self.combo_start.clear()
+            self.combo_start.addItem(f"Default ({_DEFAULT_START.get(d, 'left end')})", -1)
+            el = self.ctl.song.element(split_lane(chase[0].lane)[0] or "")
+            for i in range(el.part_count() if el else 0):
+                self.combo_start.addItem(f"{i + 1}  ·  {el.member_name(i)}", i)
+            self.combo_start.setCurrentIndex(max(0, self.combo_start.findData(chase[0].start_part)))
+        if rnd:
+            self.spin_seed.setValue(rnd[0].seed)
         self._updating = False
 
     def _on_speed(self, i):
@@ -917,6 +941,18 @@ class PatternTab(QWidget):
             n.direction = d
         if notes:
             self.ctl.commit("pattern", "direction")
+            self.grid.update()
+            self._load_note_props()      # the default start's label follows the direction
+
+    def _on_start(self, i):
+        v = self.combo_start.itemData(i)
+        if self._updating or v is None:
+            return
+        notes = [n for n in self.grid.selected if split_lane(n.lane)[1] == "chase"]
+        for n in notes:
+            n.start_part = int(v)
+        if notes:
+            self.ctl.commit("pattern", "chase_start")
             self.grid.update()
 
     def _on_seed(self, v):

@@ -29,8 +29,13 @@ CHASE_DIRS = [("right", "→  Left to right"), ("left", "←  Right to left"), (
               ("out", "⇤⇥  Centre out"), ("in", "⇥⇤  Outside in")]
 
 
-def chase_parts(step: int, n: int, direction: str) -> list:
-    """The parts (indices) a Chase lights at a 1/16 step, for an element with n parts."""
+def chase_parts(step: int, n: int, direction: str, start: int = -1) -> list:
+    """The parts (indices) a Chase lights at a 1/16 step, for an element with n parts. `start` = the
+    member it starts on; -1 = the natural start (left end, right end, centre or the outside)."""
+    if 0 <= start < n:
+        period = {"bounce": max(1, 2 * n - 2), "out": (n + 1) // 2, "in": (n + 1) // 2}.get(direction, n)
+        off = next((o for o in range(period) if start in chase_parts(o, n, direction)), 0)
+        return chase_parts(step + off, n, direction)
     if n <= 0:
         return []
     if direction == "left":
@@ -153,6 +158,7 @@ class Note:
     velocity: float = 1.0
     direction: str = "right"   # Chase notes: right | left | bounce | out (centre out) | in (outside in)
     seed: int = 1              # Random notes: which random sequence (same seed = same flicker)
+    start_part: int = -1       # Chase notes: member it starts on (-1 = left / right end or centre, by direction)
 
 
 @dataclass

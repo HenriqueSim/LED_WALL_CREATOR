@@ -672,7 +672,7 @@ class TempoBar(QWidget):
         self.spin_bpm.setValue(song.bpm)
         self.spin_off.setValue(song.beat_offset)
         self.btn_auto.setEnabled(a is not None)
-        self.lbl_det.setText(f"detected {a.bpm:.2f} BPM, first beat {a.detected_offset:.3f} s" if a else
+        self.lbl_det.setText(f"detected {a.bpm:.2f} BPM, bar 1 at {a.detected_offset:.3f} s" if a else
                              "load audio to detect the tempo")
         self._updating = False
 

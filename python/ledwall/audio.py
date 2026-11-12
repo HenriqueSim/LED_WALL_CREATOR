@@ -31,6 +31,7 @@ FFMPEG = _find_ffmpeg()
 # no console window flashing up for ffmpeg calls on Windows
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 N_BANDS = 6
+TEMPO_MIN, TEMPO_MAX = 55.0, 210.0
 
 
 @dataclass
@@ -95,6 +96,85 @@ def _attack_release(x: np.ndarray, fps: float, attack=0.01, release=0.18) -> np.
     return out
 
 
+def _grid_scores(env: np.ndarray, fps: float, bpms: np.ndarray, phase_step: float = 0.5):
+    """How well a rigid beat grid fits the onset curve, for each tempo: the mean onset strength at
+    the grid's beats, at its best phase. Returns (scores, best phase in frames)."""
+    n = len(env)
+    x = np.arange(n, dtype=np.float64)
+    scores, phases = np.empty(len(bpms)), np.empty(len(bpms))
+    for i, b in enumerate(bpms):
+        p = fps * 60.0 / b
+        k = np.arange(max(1, int((n - 1 - p) / p)))
+        ph = np.arange(0.0, p, phase_step)
+        s = np.interp(ph[:, None] + k[None, :] * p, x, env).mean(axis=1)
+        j = int(s.argmax())
+        scores[i], phases[i] = s[j], ph[j]
+    return scores, phases
+
+
+def refine_tempo(y: np.ndarray, sr: int, coarse_bpm: float) -> tuple[float, float]:
+    """Exact tempo and bar-1 position (coarse_bpm = librosa's guess, one of the candidates).
+
+    librosa's beat tracker measures the beat period in whole
+    analysis frames (23 ms), so it can only answer 117.45, 123.05, 129.20… and a song at 120 BPM
+    comes out 2.5 % fast, drifting a whole beat every ~40 beats. Here a rigid grid is slid over the
+    whole song's onset curve (5.8 ms frames, half-frame phase steps). Candidate tempos (tempogram
+    peaks, their double / half, librosa's guess) are each scored with a prior favouring typical band
+    tempos, and the winner is searched in 0.005 BPM steps; results within a hair of a whole number snap to it
+    (most songs are recorded to a click). Bar 1 is then the beat of the four that carries the most
+    kick / bass."""
+    import librosa
+    hop = 128
+    fps = sr / hop
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop, aggregate=np.median)
+    env = np.maximum(env - np.convolve(env, np.ones(64) / 64, "same"), 0.0)   # drop the slow swell
+    if len(env) < fps * 4 or not env.any():
+        return coarse_bpm, 0.0
+    # candidates: the strongest tempogram peaks, their double / half, and the tracker's guess
+    tg = librosa.feature.tempogram(onset_envelope=env, sr=sr, hop_length=hop, win_length=1024).mean(axis=1)
+    freqs = librosa.tempo_frequencies(len(tg), sr=sr, hop_length=hop)
+    peaks = [i for i in range(1, len(tg) - 1)
+             if TEMPO_MIN / 2 <= freqs[i] <= TEMPO_MAX * 2 and tg[i] >= tg[i - 1] and tg[i] >= tg[i + 1]]
+    peaks = sorted(peaks, key=lambda i: -tg[i])[:5]
+    cands = []
+    for c in [coarse_bpm] + [float(freqs[i]) for i in peaks]:
+        for m in (1.0, 2.0, 0.5):
+            b = c * m
+            if TEMPO_MIN <= b <= TEMPO_MAX and all(abs(b / o - 1) > 0.02 for o in cands):
+                cands.append(b)
+    best = None
+    for c in cands:
+        bpms = np.arange(c * 0.97, c * 1.03, 0.1)
+        s, _ = _grid_scores(env, fps, bpms)
+        b = float(bpms[int(s.argmax())])
+        # a grid at half speed hits only the accented beats, so it always fits a bit better; the
+        # prior (centred on 130 BPM, ±0.6 octave) is what picks 170 over 85 or 120 over 60
+        score = float(s.max()) * math.exp(-0.5 * (math.log2(b / 130.0) / 0.6) ** 2)
+        if best is None or score > best[0]:
+            best = (score, b)
+    c = best[1]
+    bpms = np.arange(c - 0.15, c + 0.15, 0.005)
+    s, ph = _grid_scores(env, fps, bpms)
+    j = int(s.argmax())
+    bpm, phase = float(bpms[j]), float(ph[j])
+    whole = round(bpm)
+    d = abs(whole - bpm)
+    if d <= 0.15:   # within 0.05 always (≈10 ms over a song); up to 0.15 if the fit is as good
+        sw, phw = _grid_scores(env, fps, np.array([float(whole)]))
+        if d <= 0.05 or sw[0] >= 0.985 * s[j]:
+            bpm, phase = float(whole), float(phw[0])
+    # bar 1: the beat (of 4) with the strongest low-end onsets over the song
+    p = fps * 60.0 / bpm
+    mel = librosa.feature.melspectrogram(y=y, sr=sr, hop_length=hop, n_mels=40, fmax=8000)
+    low = librosa.onset.onset_strength(S=librosa.power_to_db(mel[:4]), sr=sr, hop_length=hop)
+    low = low[:len(env)]
+    x = np.arange(len(low), dtype=np.float64)
+    k = np.arange(max(1, int((len(low) - 1 - phase) / (4 * p))))
+    downbeat = [np.interp(phase + i * p + k * 4 * p, x, low).mean() for i in range(4)]
+    bar1 = (phase + int(np.argmax(downbeat)) * p) / fps
+    return round(bpm, 3), float(bar1)
+
+
 def analyse_audio(path: str, progress=lambda p, m: None) -> AudioAnalysis:
     import librosa
     progress(5, "Decoding audio…")
@@ -111,10 +191,13 @@ def analyse_audio(path: str, progress=lambda p, m: None) -> AudioAnalysis:
     progress(35, "Beat tracking…")
     onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP)
     tempo, beat_frames = librosa.beat.beat_track(onset_envelope=onset, sr=sr, hop_length=HOP)
-    bpm = float(np.atleast_1d(tempo)[0]) if np.size(tempo) else 0.0
-    if not (40.0 <= bpm <= 250.0):
-        bpm = 120.0
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=HOP)
+    coarse = float(np.atleast_1d(tempo)[0]) if np.size(tempo) else 0.0
+    if not (40.0 <= coarse <= 250.0):
+        coarse = 120.0
+    progress(45, "Refining tempo…")
+    bpm, bar1 = refine_tempo(y, sr, coarse)
+    period = 60.0 / bpm
+    beat_times = bar1 + period * np.arange(max(0, int((duration - bar1) / period) + 1))
 
     progress(60, "Energy envelopes…")
     rms = librosa.feature.rms(y=y, hop_length=HOP)[0]

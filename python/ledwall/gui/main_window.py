@@ -154,6 +154,8 @@ class MainWindow(QMainWindow):
         self.free_clock = QElapsedTimer()
         self.free_clock.start()
         self.master_tab.editPatternRequested.connect(self._edit_pattern)
+        self.master_tab.editLyricRequested.connect(self._edit_lyric)
+        self.pattern_tab.lyricModeChanged.connect(self._update_audition)
         self.look_tab.loadAudioRequested.connect(self.load_audio_dialog)
         self.export_tab.renderRequested.connect(self.render_video)
         self.export_tab.playFromStartRequested.connect(self.play_from_start)
@@ -243,6 +245,10 @@ class MainWindow(QMainWindow):
     def _seek_pattern_step(self, step: float):
         """Ruler click in the pattern editor: jump to that step of the pattern, in the repetition of
         the pattern the playhead is in now (inside the looped section / clip)."""
+        ly = self.pattern_tab.grid.lyric
+        if ly is not None:
+            self.seek(self.ctl.engine.b2t(ly.start + step / STEPS_PER_BEAT))
+            return
         pat = self.ctl.current_pattern
         if not pat:
             return
@@ -281,7 +287,11 @@ class MainWindow(QMainWindow):
             self.canvas.selection = None
         pat = self.ctl.current_pattern
         self.section, eng.audition_pattern = None, None
-        if cur is self.pattern_tab and self.pattern_tab.chk_loop.isChecked() and pat:
+        ly = self.pattern_tab.grid.lyric if cur is self.pattern_tab else None
+        if ly is not None:
+            if self.pattern_tab.chk_loop.isChecked():
+                self.section = (eng.b2t(ly.start), eng.b2t(ly.start + ly.length))
+        elif cur is self.pattern_tab and self.pattern_tab.chk_loop.isChecked() and pat:
             clip = self._pattern_section()
             if clip:
                 self.section = (eng.b2t(clip.start), eng.b2t(clip.start + clip.length))
@@ -291,6 +301,8 @@ class MainWindow(QMainWindow):
             self.lbl_mode.setText("Band: the selected member / group lit")
         elif eng.preview_pulse:
             self.lbl_mode.setText("Elements: pulse preview")
+        elif self.section and ly is not None:
+            self.lbl_mode.setText(f"Looping lyric \"{ly.text}\"")
         elif self.section:
             bar0 = int(eng.t2b(self.section[0]) // 4) + 1
             bar1 = int(round(eng.t2b(self.section[1]) / 4))
@@ -301,7 +313,15 @@ class MainWindow(QMainWindow):
             self.lbl_mode.setText("Playing: Master Track")
         self._dirty = True
 
+    def _edit_lyric(self, lid, step=0.0, t=None):
+        self.tabs.setCurrentWidget(self.pattern_tab)
+        self.pattern_tab.edit_lyric(lid, step)
+        if t is not None:
+            self.seek(t)
+        self.pattern_tab.grid.setFocus()
+
     def _edit_pattern(self, pid, step=0.0, t=None):
+        self.pattern_tab.leave_lyric()
         self._section_clip_id = None
         if t is not None:
             b = self.ctl.engine.t2b(t)
@@ -610,6 +630,11 @@ class MainWindow(QMainWindow):
         # pattern playhead: auditioned pattern, or the clip of this pattern under the playhead
         pat = self.ctl.current_pattern
         step = None
+        grid = self.pattern_tab.grid
+        ly = grid.lyric
+        if ly is not None:
+            pat = None
+            step = (b - ly.start) * STEPS_PER_BEAT if ly.start <= b < ly.start + ly.length else None
         if pat:
             if eng.audition_pattern == pat.id:
                 step = (b * STEPS_PER_BEAT) % pat.steps
@@ -629,6 +654,8 @@ class MainWindow(QMainWindow):
             if clip is not None:
                 rep = math.floor((b - clip.start) / pat.beats) if clip.start <= b < clip.start + clip.length else 0
                 wave = clip.start + rep * pat.beats
+        if ly is not None and self.ctl.analysis is not None:
+            wave = ly.start
         if step != grid.playhead_step or wave != grid.wave_start_beat:
             grid.playhead_step, grid.wave_start_beat = step, wave
             grid.update()

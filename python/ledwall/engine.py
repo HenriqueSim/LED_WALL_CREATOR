@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .audio import AudioAnalysis
-from .model import BEATS_PER_BAR, STEPS_PER_BEAT, Song, chase_parts, el_lane, part_owners, split_lane
+from .model import BEATS_PER_BAR, LYRIC_DEFAULT_RATE, STEPS_PER_BEAT, Song, chase_parts, el_lane, part_owners, split_lane
 
 
 @dataclass
@@ -37,10 +37,12 @@ class FrameState:
     logo_peak: float = 0.0
     lyric: str = ""
     lyric_alpha: float = 0.0
+    lyric_words: int = -1          # words of the lyric shown so far (-1 = all of them)
+    lyric_flash: float = 0.0       # white hit on the lyric (its Flash lane)
     elements: dict = field(default_factory=dict)   # element id -> (levels, flash per part, presence)
 
 
-_SCALARS = ("env", "beat_pulse", "bloom", "sparkle", "blackout", "logo_level", "logo_peak", "lyric_alpha")
+_SCALARS = ("env", "beat_pulse", "bloom", "sparkle", "blackout", "logo_level", "logo_peak", "lyric_alpha", "lyric_flash")
 
 
 def blend_states(a: FrameState, b: FrameState, w: float) -> FrameState:
@@ -55,7 +57,7 @@ def blend_states(a: FrameState, b: FrameState, w: float) -> FrameState:
         lb, fb, pb = b.elements.get(k, (0.0, 0.0, 0.0))
         out.elements[k] = ((1 - w) * la + w * lb, (1 - w) * fa + w * fb, (1 - w) * pa + w * pb)
     if w > 0.5:
-        out.lyric, out.step = b.lyric, b.step
+        out.lyric, out.step, out.lyric_words = b.lyric, b.step, b.lyric_words
     return out
 
 
@@ -365,7 +367,7 @@ class MotionEngine:
             # Band Name Light: a glow held while the note lasts plus a flash at each note start
             logo_peak = lane("fx:logo_glow", 0) * lk.logo_glow + lane("fx:logo_glow", 2) * lk.logo_peak
 
-        lyric, lyric_alpha = "", 0.0
+        lyric, lyric_alpha, lyric_words, lyric_flash = "", 0.0, -1, 0.0
         for ly in song.lyrics:
             if loop and not (loop[0] <= ly.start < loop[1]):
                 continue
@@ -373,6 +375,9 @@ class MotionEngine:
                 fade = 0.2 / self.period
                 lyric = ly.text
                 lyric_alpha = min(1.0, (b - ly.start) / fade, (ly.start + ly.length - b) / fade)
+                if ly.notes:
+                    lv, lyric_words, lyric_flash = self.lyric_light(ly, b - ly.start)
+                    lyric_alpha *= lv
                 break
 
         return FrameState(
@@ -381,7 +386,48 @@ class MotionEngine:
             bands=bands, env=env_s, beat_pulse=beat_pulse, bloom=min(bloom, 2.0),
             sparkle=lane("fx:sparkle", 1), step=step, blackout=lane("fx:blackout", 1),
             logo_level=logo_level, logo_peak=logo_peak, lyric=lyric, lyric_alpha=max(0.0, lyric_alpha),
+            lyric_words=lyric_words, lyric_flash=lyric_flash,
         )
+
+    def lyric_light(self, ly, lb: float) -> tuple:
+        """(level 0..1, words shown (-1 = all), white flash 0..1) of a lyric clip with notes, `lb`
+        beats after its start. Light / Pulse / Strobe / Flash notes light it (between them it glows
+        at `idle`); with only Word-by-word notes the text is simply on."""
+        period = self.period
+        end = ly.length
+        level, flash, words, n_word, lit = 0.0, 0.0, 0, 0, False
+        for n in ly.notes:
+            sub = n.lane[3:] if n.lane.startswith("ly:") else n.lane
+            os_ = n.start / STEPS_PER_BEAT
+            if os_ >= end:
+                continue
+            oe = min(os_ + n.length / STEPS_PER_BEAT, end)
+            if sub == "words":
+                n_word += 1
+                words += lb >= os_
+                continue
+            lit = True
+            if lb < os_:
+                continue
+            age = (lb - os_) * period            # seconds since the note started
+            on = lb < oe
+            rate = n.rate or LYRIC_DEFAULT_RATE.get(sub, 1.0)
+            ph = ((lb - os_) * rate) % 1.0
+            if sub == "light":
+                v = n.velocity * min(1.0, age / 0.03) if on else n.velocity * math.exp(-(lb - oe) * period / 0.15)
+            elif sub == "pulse":
+                v = n.velocity * (0.2 + 0.8 * math.exp(-ph * 5.0)) if on else 0.0
+            elif sub == "strobe":
+                v = n.velocity if on and ph < 0.45 else 0.0
+            elif sub == "flash":
+                f = n.velocity * math.exp(-age / 0.12)
+                flash = max(flash, f)
+                v = f
+            else:
+                v = 0.0
+            level = max(level, v)
+        level = max(level, ly.idle) if lit else 1.0
+        return min(1.0, level), (words if n_word else -1), min(1.0, flash)
 
     def active_clip_at(self, b: float, track: int | None = None):
         for c in self.song.clips:

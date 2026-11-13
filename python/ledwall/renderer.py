@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import colorsys
 import math
+import re
 
 import cv2
 import numpy as np
@@ -822,8 +823,10 @@ class FrameRenderer:
         return mul3, add3
 
     # ---- lyrics -----------------------------------------------------------------------------------
-    def _lyric_layers(self, text: str, lk):
-        key = (text, round(lk.lyrics_size, 3), round(lk.headroom, 3), lk.lyrics_font or lk.logo_font)
+    def _lyric_layers(self, text: str, lk, words: int = -1):
+        """Fill / glow masks of a lyric. `words` >= 0 draws only its first words, where they sit in the
+        whole line (so the line doesn't shift as words appear)."""
+        key = (text, round(lk.lyrics_size, 3), round(lk.headroom, 3), lk.lyrics_font or lk.logo_font, words)
         if key in self._lyric_cache:
             return self._lyric_cache[key]
         if len(self._lyric_cache) > 48:
@@ -847,7 +850,11 @@ class FrameRenderer:
         painter.setPen(QColor(255, 255, 255))
         ox = self.w / 2 - (r.left() + r.right()) / 2
         oy = lk.headroom * self.h * 0.5 - (r.top() + r.bottom()) / 2
-        painter.drawText(QRectF(ox, oy - fm.ascent(), self.w * 2, fm.height()), Qt.AlignmentFlag.AlignLeft, text)
+        shown = text
+        if words >= 0:
+            ends = [m.end() for m in re.finditer(r"\S+", text)]
+            shown = text[:ends[words - 1]] if 0 < words <= len(ends) else ("" if words == 0 else text)
+        painter.drawText(QRectF(ox, oy - fm.ascent(), self.w * 2, fm.height()), Qt.AlignmentFlag.AlignLeft, shown)
         painter.end()
         arr = _qimage_to_array(img, self.w, self.h)
         if not arr.any():
@@ -863,18 +870,20 @@ class FrameRenderer:
         return res
 
     def _overlay_lyric(self, img, st: FrameState, song: Song):
-        layers = self._lyric_layers(st.lyric, song.look)
+        layers = self._lyric_layers(st.lyric, song.look, st.lyric_words)
         if layers is None:
             return
         x0, y0, x1, y1, fill, glow = layers
         a = round(st.lyric_alpha, 2)
-        key = ("lyric", id(layers), a, tuple(song.look.accent_rgb))
+        f = round(st.lyric_flash, 2)
+        key = ("lyric", id(layers), a, f, tuple(song.look.accent_rgb))
         mix = self._logo_mix.get(key)
         if mix is None:            # uint8 multiply / add maps, cached per fade step (see _overlay_logo)
             if len(self._logo_mix) > 160:
                 self._logo_mix.clear()
             mul = np.repeat(1.0 - glow * 0.8 * a, 3, axis=2)
-            add = (fill * a + glow * 0.45 * a) * np.array(_bgr(song.look.accent_rgb), np.float32)
+            col = np.array(_bgr(song.look.accent_rgb), np.float32) * (1 - f) + 255.0 * f   # Flash: towards white
+            add = (fill * a + glow * (0.45 + 0.6 * f) * a) * col
             mix = (np.clip(mul * 255.0 + 0.5, 0, 255).astype(np.uint8), np.clip(add + 0.5, 0, 255).astype(np.uint8))
             self._logo_mix[key] = mix
         roi = img[y0:y1, x0:x1]

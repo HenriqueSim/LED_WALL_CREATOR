@@ -159,6 +159,7 @@ class Note:
     direction: str = "right"   # Chase notes: right | left | bounce | out (centre out) | in (outside in)
     seed: int = 1              # Random notes: which random sequence (same seed = same flicker)
     start_part: int = -1       # Chase notes: member it starts on (-1 = left / right end or centre, by direction)
+    rate: float = 0.0          # lyric Strobe / Pulse notes: hits per beat (0 = the lane's default)
 
 
 @dataclass
@@ -197,12 +198,34 @@ class Clip:
     muted: list = field(default_factory=list)   # element ids (and "global") switched off in this clip only
 
 
+# lanes of a lyric clip (pattern editor, lyrics view): "ly:<key>"
+LYRIC_LANES = [
+    ("light",  "Light",        "Lights the text while the note plays"),
+    ("pulse",  "Pulse",        "Throbs at the note's rate (default: every beat)"),
+    ("strobe", "Strobe",       "Flashes at the note's rate (default: 1/16)"),
+    ("flash",  "Flash",        "A bright white hit at each note start"),
+    ("words",  "Word by word", "Each note shows the next word"),
+]
+LYRIC_DEFAULT_RATE = {"pulse": 1.0, "strobe": 4.0}
+# hits per beat offered for lyric Strobe / Pulse notes
+LYRIC_RATES = [(0.25, "1 per bar"), (0.5, "every 2 beats (1/2)"), (1.0, "every beat (1/4)"), (2.0, "1/8"),
+               (3.0, "1/8 triplets"), (4.0, "1/16"), (6.0, "1/16 triplets"), (8.0, "1/32")]
+
+
 @dataclass
 class LyricClip:
+    """Text in the top band. With no notes it is simply shown; once it has notes (lanes LYRIC_LANES,
+    starts in steps from the clip start) the notes light it, and `idle` is its glow between them."""
     id: str
     text: str
     start: float          # beats
     length: float         # beats
+    notes: list = field(default_factory=list)
+    idle: float = 0.0
+
+    @property
+    def steps(self) -> int:
+        return max(1, int(round(self.length * STEPS_PER_BEAT)))
 
 
 @dataclass
@@ -601,7 +624,7 @@ class Song:
             members=members,
             patterns=patterns,
             clips=[Clip(**c) for c in d.get("clips", [])],
-            lyrics=[LyricClip(**l) for l in d.get("lyrics", [])],
+            lyrics=[LyricClip(**{**l, "notes": [Note(**n) for n in l.get("notes", [])]}) for l in d.get("lyrics", [])],
             elements=elements,
             look=look,
             bpm=d.get("bpm", 120.0),

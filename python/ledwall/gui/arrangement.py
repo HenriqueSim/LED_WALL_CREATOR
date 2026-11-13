@@ -36,12 +36,13 @@ def toggle_clip_element(clips, key: str, on: bool):
             c.muted.append(key)
 from .common import hint
 
-_CLIP_CLIPBOARD: list = []   # [("clip", pattern_id, track, rel_start, length, muted) | ("lyric", text, rel_start, length)]
+_CLIP_CLIPBOARD: list = []   # [("clip", pattern_id, track, rel_start, length, muted) | ("lyric", text, rel_start, length, notes, idle)]
 
 
 class ArrangementView(QWidget):
     seekRequested = pyqtSignal(float)
     editPattern = pyqtSignal(str, float, float)   # pattern id, step inside the pattern, song time
+    editLyric = pyqtSignal(str, float, float)     # lyric id, step inside the lyric, song time
     regionChanged = pyqtSignal()
     audioMoved = pyqtSignal()                     # the audio was dragged (bar 1 offset changed)
     selectionChanged = pyqtSignal()
@@ -299,6 +300,12 @@ class ArrangementView(QWidget):
         for l in song.lyrics:
             r = self.lyric_rect(l)
             p.fillRect(r, QColor(120, 90, 40))
+            if l.notes:     # where its light / strobe / word notes sit
+                bw = r.width() / max(1, l.steps)
+                for n in l.notes:
+                    if n.start < l.steps:
+                        p.fillRect(QRectF(r.left() + n.start * bw, r.bottom() - 5, max(1.5, n.length * bw - 1), 4),
+                                   QColor(255, 210, 140, 200))
             p.setPen(QColor(255, 235, 200))
             p.drawText(r.adjusted(4, 0, -2, 0), Qt.AlignmentFlag.AlignVCenter, l.text)
             p.setPen(QPen(QColor(255, 255, 255), 2) if l in self.selected else QPen(QColor(200, 160, 90), 1))
@@ -377,7 +384,8 @@ class ArrangementView(QWidget):
             return
         s0 = min(i.start for i in self.selected)
         _CLIP_CLIPBOARD = [("clip", i.pattern_id, i.track, i.start - s0, i.length, list(i.muted)) if isinstance(i, Clip)
-                           else ("lyric", i.text, i.start - s0, i.length) for i in self.selected]
+                           else ("lyric", i.text, i.start - s0, i.length, copy.deepcopy(i.notes), i.idle)
+                           for i in self.selected]
 
     def paste(self, at_beat: float | None = None):
         if not _CLIP_CLIPBOARD:
@@ -392,7 +400,7 @@ class ArrangementView(QWidget):
                 song.clips.append(c)
                 new.append(c)
             elif item[0] == "lyric":
-                l = LyricClip(new_id(), item[1], at_beat + item[2], item[3])
+                l = LyricClip(new_id(), item[1], at_beat + item[2], item[3], copy.deepcopy(item[4]), item[5])
                 song.lyrics.append(l)
                 new.append(l)
         self.selected = new
@@ -580,14 +588,22 @@ class ArrangementView(QWidget):
         if isinstance(item, Clip):
             self._open_clip(item, self.x2b(pos.x()))
         elif isinstance(item, LyricClip):
-            text, ok = QInputDialog.getText(self, "Lyric", "Text:", text=item.text)
-            if ok and text.strip():
-                item.text = text.strip()
-                self._commit()
+            self._open_lyric(item, self.x2b(pos.x()))
         elif isinstance(row, tuple):
             self.place_pattern(self.snap_b(self.x2b(pos.x()), "floor"), row[1])
         elif row == "lyrics":
             self.add_lyric(self.snap_b(self.x2b(pos.x()), "floor"))
+
+    def _open_lyric(self, ly: LyricClip, beat: float):
+        """Open a lyric in the pattern editor (its text and its light / strobe / word lanes)."""
+        beat = min(max(beat, ly.start), ly.start + ly.length - 1e-6)
+        self.editLyric.emit(ly.id, (beat - ly.start) * STEPS_PER_BEAT, self.eng.b2t(beat))
+
+    def edit_lyric_text(self, ly: LyricClip):
+        text, ok = QInputDialog.getText(self, "Lyric", "Text:", text=ly.text)
+        if ok and text.strip():
+            ly.text = text.strip()
+            self._commit()
 
     def _open_clip(self, clip: Clip, beat: float):
         """Open the clip's pattern at the spot that was tapped (which loop pass doesn't matter)."""
@@ -604,7 +620,11 @@ class ArrangementView(QWidget):
             self.selected = [item]
         a_dup = m.addAction("Duplicate  (Ctrl+D)")
         a_del = m.addAction("Delete  (Del)")
-        a_edit = a_uniq = a_fit = None
+        a_edit = a_uniq = a_fit = a_lyr = a_txt = None
+        if isinstance(item, LyricClip):
+            m.addSeparator()
+            a_lyr = m.addAction("Edit lyric effects (light, strobe, word by word…)")
+            a_txt = m.addAction("Edit text…")
         if isinstance(item, Clip):
             m.addSeparator()
             a_edit = m.addAction("Edit pattern")
@@ -625,6 +645,10 @@ class ArrangementView(QWidget):
             self.delete_selected()
         elif chosen is a_edit:
             self._open_clip(item, item.start)
+        elif chosen is a_lyr:
+            self._open_lyric(item, item.start)
+        elif chosen is a_txt:
+            self.edit_lyric_text(item)
         elif chosen is a_uniq:
             self.make_unique(item)
         elif chosen is a_fit:
@@ -783,6 +807,7 @@ class TempoBar(QWidget):
 
 class MasterTab(QWidget):
     editPatternRequested = pyqtSignal(str, float, float)
+    editLyricRequested = pyqtSignal(str, float, float)
 
     def __init__(self, ctl, get_playhead, seek, parent=None):
         super().__init__(parent)
@@ -846,11 +871,12 @@ class MasterTab(QWidget):
         ll.addWidget(hint("Double-click a track: place pattern · drag clip: move (Ctrl copies) · drag right edge: "
                           "stretch (pattern loops) · double-click clip: edit its pattern · right-click: menu · "
                           "Ctrl+C / V (at playhead) / D · Shift-drag ruler: loop region · Shift-drag tracks: select · "
-                          "double-click Lyrics lane: add text · ON / OFF next to a track: switch it off to compare patterns"))
+                          "double-click Lyrics lane: add text · double-click a lyric: its text, light, strobe, word by word · ON / OFF next to a track: switch it off to compare patterns"))
 
         self.view = ArrangementView(ctl)
         self.view.seekRequested.connect(seek)
         self.view.editPattern.connect(self.editPatternRequested.emit)
+        self.view.editLyric.connect(self.editLyricRequested.emit)
         self.view.regionChanged.connect(self._update_region_label)
         self.view.audioMoved.connect(self._load_tempo)
         self.view.selectionChanged.connect(self._load_clip_elements)

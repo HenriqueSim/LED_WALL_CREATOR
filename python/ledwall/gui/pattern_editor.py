@@ -12,17 +12,50 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 import numpy as np
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QScrollBar, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QPushButton, QScrollArea, QScrollBar, QSpinBox, QVBoxLayout, QWidget,
 )
 
 import dataclasses
 
+import re
+
+from ..model import BEATS_PER_BAR, LYRIC_DEFAULT_RATE, LYRIC_LANES, LYRIC_RATES
 from ..model import CHASE_DIRS, PATTERN_COLORS, STEPS_PER_BAR, STEPS_PER_BEAT, Note, Pattern, el_lane, new_id, split_lane
 from .common import LANE_COLORS, ColorButton, hint, roomy
 
 _CLIPBOARD: list = []   # [(Note copy, rel_start, rel_row)]: rows counted from the copy's top row
 _DIR_ARROW = {"right": "→", "left": "←", "bounce": "↔", "out": "⇤⇥", "in": "⇥⇤"}
+_RATE_TAG = {0.25: "1/bar", 0.5: "1/2", 1.0: "1/4", 2.0: "1/8", 3.0: "1/8T", 4.0: "1/16", 6.0: "1/16T", 8.0: "1/32"}
+
+
+class _LyricView:
+    """A lyric clip seen as a pattern by the grid: its notes and its length in steps."""
+    elements: list = []
+
+    def __init__(self, ly):
+        self.ly = ly
+
+    id = property(lambda self: self.ly.id)
+    steps = property(lambda self: self.ly.steps)
+    beats = property(lambda self: self.ly.length)
+    bars = property(lambda self: max(1, math.ceil(self.ly.length / BEATS_PER_BAR)))
+
+    @property
+    def notes(self):
+        return self.ly.notes
+
+    @notes.setter
+    def notes(self, v):
+        self.ly.notes = v
+
+    def uses(self, _eid) -> bool:
+        return False
+
+    def speed(self, _eid) -> float:
+        return 1.0
+
+
 _DEFAULT_START = {"right": "left end", "bounce": "left end", "left": "right end", "out": "centre", "in": "outside"}
 
 
@@ -54,6 +87,7 @@ class PatternGrid(QWidget):
         self.collapsed: set = set()               # folded element ids (and "global")
         self.wave_start_beat: float | None = None  # song beat under step 0 (where the pattern plays), for the waveform
         self.show_wave = True
+        self.lyric_id: str | None = None   # editing a lyric clip instead of a pattern
         self._drag = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -61,11 +95,20 @@ class PatternGrid(QWidget):
 
     # ---- model access -----------------------------------------------------------------
     @property
+    def lyric(self):
+        return next((l for l in self.ctl.song.lyrics if l.id == self.lyric_id), None) if self.lyric_id else None
+
+    @property
     def pattern(self) -> Pattern | None:
+        if self.lyric_id:
+            ly = self.lyric
+            return _LyricView(ly) if ly else None
         return self.ctl.current_pattern
 
     def lanes(self):
         """Visible rows (folders + the lanes of open folders): [(key, label, kind)]."""
+        if self.lyric_id:
+            return [(f"ly:{k}", label, "lyric") for k, label, _ in LYRIC_LANES]
         return self.ctl.song.lane_rows(self.pattern, self.collapsed)
 
     def edit_keys(self) -> list:
@@ -267,6 +310,11 @@ class PatternGrid(QWidget):
                     if n.lane.startswith(prefix):
                         rect = self.note_rect(n, i)
                         p.fillRect(rect.adjusted(0, 4, 0, -4), QColor(255, 200, 140, int(40 + 60 * n.velocity)))
+            word_tags = {}
+            if self.lyric_id:     # Word-by-word notes show the word they bring in
+                words = re.findall(r"\S+", self.lyric.text)
+                wn = sorted((n for n in pat.notes if n.lane == "ly:words"), key=lambda n: n.start)
+                word_tags = {id(n): (words[i] if i < len(words) else "–") for i, n in enumerate(wn)}
             for n in pat.notes:
                 if n.lane not in keys:
                     continue
@@ -284,7 +332,12 @@ class PatternGrid(QWidget):
                     p.drawRect(rect)
                 sub = split_lane(n.lane)[1]
                 tag = ""
-                if sub == "chase":
+                if sub in ("ly:strobe", "ly:pulse"):
+                    r_ = n.rate or LYRIC_DEFAULT_RATE[sub[3:]]
+                    tag = _RATE_TAG.get(r_, f"{r_:g}/beat")
+                elif sub == "ly:words":
+                    tag = word_tags.get(id(n), "")
+                elif sub == "chase":
                     tag = _DIR_ARROW.get(n.direction, "→") + (f" {n.start_part + 1}" if n.start_part >= 0 else "")
                 elif sub == "random":
                     tag = f"#{n.seed}"
@@ -372,6 +425,8 @@ class PatternGrid(QWidget):
             self._commit()
 
     def _all_keys(self, pat) -> list:
+        if self.lyric_id:
+            return [k for k, _, _ in self.lanes()]
         return [k for k, _, _ in self.ctl.song.lanes(pat)]
 
     def copy_selected(self):
@@ -636,6 +691,7 @@ class PatternGrid(QWidget):
 
 class PatternTab(QWidget):
     loopSectionChanged = pyqtSignal(bool)
+    lyricModeChanged = pyqtSignal()
 
     SNAPS = [("1/16", 1), ("1/8", 2), ("1/4 (beat)", 4), ("1/2", 8), ("1 bar", 16)]
     SPEEDS = [("¼×  (quarter time)", 0.25), ("½×  (half time)", 0.5), ("1×  (song tempo)", 1.0),
@@ -650,18 +706,51 @@ class PatternTab(QWidget):
         left.setFixedWidth(250)
         ll = QVBoxLayout(left)
         ll.setContentsMargins(4, 4, 4, 4)
-        ll.addWidget(QLabel("<b>Patterns</b>"))
+        self.box_patterns = QWidget()
+        bl = QVBoxLayout(self.box_patterns)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.addWidget(QLabel("<b>Patterns</b>"))
         self.list = roomy(QListWidget())
         self.list.setMinimumHeight(130)
         self.list.currentItemChanged.connect(self._on_select)
         self.list.itemChanged.connect(self._on_rename)
-        ll.addWidget(self.list, 1)
+        bl.addWidget(self.list, 1)
         row = QHBoxLayout()
         for text, fn in (("New", self.new_pattern), ("Duplicate", self.duplicate_pattern), ("Delete", self.delete_pattern)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             row.addWidget(b)
-        ll.addLayout(row)
+        bl.addLayout(row)
+        ll.addWidget(self.box_patterns, 1)
+
+        # ---- lyric mode (a lyric double-clicked on the master track) ----
+        self.box_lyric = QGroupBox("Lyric")
+        lv = QVBoxLayout(self.box_lyric)
+        self.edit_lyric_text = QLineEdit()
+        self.edit_lyric_text.setToolTip("The text shown in the top band")
+        self.edit_lyric_text.textEdited.connect(self._on_lyric_text)
+        lv.addWidget(self.edit_lyric_text)
+        self.lbl_lyric_where = QLabel()
+        self.lbl_lyric_where.setObjectName("hint")
+        self.lbl_lyric_where.setWordWrap(True)
+        lv.addWidget(self.lbl_lyric_where)
+        lf = QFormLayout()
+        lv.addLayout(lf)
+        self.spin_lyric_idle = QDoubleSpinBox()
+        self.spin_lyric_idle.setRange(0.0, 1.0)
+        self.spin_lyric_idle.setSingleStep(0.05)
+        self.spin_lyric_idle.setToolTip("How bright the text stays between notes (0 = dark until a note lights it). "
+                                        "Without any Light / Pulse / Strobe / Flash notes the text is simply on.")
+        self.spin_lyric_idle.valueChanged.connect(self._on_lyric_idle)
+        lf.addRow("Glow between notes", self.spin_lyric_idle)
+        b_back = QPushButton("◀  Back to patterns")
+        b_back.clicked.connect(self.leave_lyric)
+        lv.addWidget(b_back)
+        lv.addWidget(hint("Light: lit while the note plays · Pulse / Strobe: at the note's rate (pick it below "
+                       "with the note selected) · Flash: a white hit · Word by word: each note brings in the "
+                       "next word"))
+        self.box_lyric.setVisible(False)
+        ll.addWidget(self.box_lyric)
         form = QFormLayout()
         self.spin_bars = QSpinBox()
         self.spin_bars.setRange(1, 16)
@@ -714,6 +803,14 @@ class PatternTab(QWidget):
                                   "flicker. Also used for new Random notes.")
         self.spin_seed.valueChanged.connect(self._on_seed)
         form.addRow("Random seed", self.spin_seed)
+        self.combo_rate = QComboBox()
+        self.combo_rate.addItem("Lane default", 0.0)
+        for v, label in LYRIC_RATES:
+            self.combo_rate.addItem(label, v)
+        self.combo_rate.setToolTip("How fast the selected lyric Strobe / Pulse notes flash (hits per beat at the song "
+                                   "tempo). Default: Strobe 1/16, Pulse every beat.")
+        self.combo_rate.currentIndexChanged.connect(self._on_rate)
+        form.addRow("Rate", self.combo_rate)
         self.form_props = form
         ll.addLayout(form)
         self.lbl_elements = QLabel()
@@ -732,12 +829,14 @@ class PatternTab(QWidget):
                                  "low end (kick / bass) in orange from the bottom, to place hits on the band's beats.")
         self.chk_wave.toggled.connect(self._toggle_wave)
         ll.addWidget(self.chk_wave)
-        frow = QHBoxLayout()
+        self.box_fold = QWidget()
+        frow = QHBoxLayout(self.box_fold)
+        frow.setContentsMargins(0, 0, 0, 0)
         for text, c in (("Fold all", True), ("Unfold all", False)):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, cc=c: self.grid.set_all_collapsed(cc))
             frow.addWidget(b)
-        ll.addLayout(frow)
+        ll.addWidget(self.box_fold)
         btn_fit = QPushButton("Fit pattern to width")
         btn_fit.clicked.connect(lambda: self.grid.fit())
         ll.addWidget(btn_fit)
@@ -823,6 +922,8 @@ class PatternTab(QWidget):
         self.ctl.set_current_pattern(cur.data(Qt.ItemDataRole.UserRole))
 
     def _on_current_changed(self, pid):
+        if self.grid.lyric_id is not None:
+            self.leave_lyric()
         self._updating = True
         for i in range(self.list.count()):
             it = self.list.item(i)
@@ -889,6 +990,18 @@ class PatternTab(QWidget):
         """Speed / chase direction / random seed controls for the current selection."""
         p = self.ctl.current_pattern
         self._updating = True
+        lyr = self.grid.lyric_id is not None
+        rate_notes = [n for n in self.grid.selected if n.lane in ("ly:strobe", "ly:pulse")] if lyr else []
+        for w in (self.spin_bars, self.btn_color, self.combo_speed, self.lbl_speed_for):
+            self.form_props.setRowVisible(w, not lyr)
+        self.form_props.setRowVisible(self.combo_rate, bool(rate_notes))
+        if rate_notes:
+            self.combo_rate.setCurrentIndex(max(0, self.combo_rate.findData(float(rate_notes[0].rate))))
+        if lyr:
+            for w in (self.combo_dir, self.combo_start, self.spin_seed):
+                self.form_props.setRowVisible(w, False)
+            self._updating = False
+            return
         els = self._speed_targets()
         self.combo_speed.setEnabled(bool(els))
         if els:
@@ -917,6 +1030,83 @@ class PatternTab(QWidget):
         if rnd:
             self.spin_seed.setValue(rnd[0].seed)
         self._updating = False
+
+    # ---- lyric mode ---------------------------------------------------------------------------
+    @property
+    def lyric_id(self):
+        return self.grid.lyric_id
+
+    def edit_lyric(self, lid: str, step: float = 0.0):
+        """Show a lyric clip's lanes in the grid (opened from the master track)."""
+        if not any(l.id == lid for l in self.ctl.song.lyrics):
+            return
+        self.grid.lyric_id = lid
+        self.grid.cursor_lane = None
+        self._set_lyric_ui(True)
+        self.grid.selected = []
+        self.grid.highlight_bar = None
+        self.grid.refresh_size()
+        self._load_lyric()
+        self._load_note_props()
+        self.grid.fit()
+        self.grid.focus_step(step)
+        self.lyricModeChanged.emit()
+
+    def leave_lyric(self):
+        if self.grid.lyric_id is None:
+            return
+        self.grid.lyric_id = None
+        self.grid.cursor_lane = None
+        self._set_lyric_ui(False)
+        self._load_props()
+        self.grid.fit()
+        self.lyricModeChanged.emit()
+
+    def _set_lyric_ui(self, on: bool):
+        self.box_lyric.setVisible(on)
+        for w in (self.box_patterns, self.box_fold, self.lbl_elements):
+            w.setVisible(not on)
+        self.chk_loop.setText("Loop this lyric while editing" if on else "Loop this section while editing")
+
+    def _load_lyric(self):
+        ly = self.grid.lyric
+        if not ly:
+            return
+        self._updating = True
+        if self.edit_lyric_text.text() != ly.text and not self.edit_lyric_text.hasFocus():
+            self.edit_lyric_text.setText(ly.text)
+        self.spin_lyric_idle.setValue(ly.idle)
+        bar0 = int(ly.start // BEATS_PER_BAR) + 1
+        bars = ly.length / BEATS_PER_BAR
+        self.lbl_lyric_where.setText(f"bar {bar0}, {bars:g} bar{'s' if bars != 1 else ''} long "
+                                     "(change on the master track)")
+        self._updating = False
+
+    def _on_lyric_text(self, text: str):
+        ly = self.grid.lyric
+        if self._updating or not ly or not text.strip():
+            return
+        ly.text = text.strip()
+        self.ctl.commit("lyric", "lyric_text")
+        self.grid.update()
+
+    def _on_lyric_idle(self, v: float):
+        ly = self.grid.lyric
+        if self._updating or not ly:
+            return
+        ly.idle = float(v)
+        self.ctl.commit("lyric", "lyric_idle")
+
+    def _on_rate(self, i):
+        v = self.combo_rate.itemData(i)
+        if self._updating or v is None:
+            return
+        notes = [n for n in self.grid.selected if n.lane in ("ly:strobe", "ly:pulse")]
+        for n in notes:
+            n.rate = float(v)
+        if notes:
+            self.ctl.commit("pattern", "lyric_rate")
+            self.grid.update()
 
     def _on_speed(self, i):
         p = self.ctl.current_pattern
@@ -1017,6 +1207,17 @@ class PatternTab(QWidget):
         self.grid.update()
 
     def _on_changed(self, kind):
+        if self.grid.lyric_id is not None:
+            if self.grid.lyric is None:          # undone / deleted / another project
+                self.leave_lyric()
+            else:
+                if kind == "all":
+                    self.grid.selected = []
+                self._load_lyric()
+                self.grid.refresh_size()
+                if kind in ("all", "patterns", "band"):
+                    self.reload_list()
+                return
         if kind in ("all", "patterns", "band"):
             self.reload_list()
         elif kind == "elements":
